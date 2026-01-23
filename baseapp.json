@@ -1,0 +1,10 @@
+{
+  "name": "Base Bingo",
+  "description": "A fun onchain Bingo mini app built on Base.",
+  "category": "Games",
+  "network": "Base",
+  "app_url": "https://YOUR_APP_URL",
+  "icon_url": "https://YOUR_APP_URL/icon.png",
+  "developer": "Melih Ayata",
+  "source_code": "https://github.com/USERNAME/base-bingo"
+}
