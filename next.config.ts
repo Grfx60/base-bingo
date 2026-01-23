@@ -7,7 +7,7 @@ const nextConfig: NextConfig = {
       ...(config.resolve.alias || {}),
       "@react-native-async-storage/async-storage": path.resolve(
         __dirname,
-        "lib/asyncStorageShim.ts"
+        "app/lib/asyncStorageShim.ts"
       ),
     };
     return config;
