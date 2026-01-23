@@ -11,6 +11,10 @@ type Cell = {
   done: boolean;
 };
 
+type MiniKitUser = {
+  address?: string;
+};
+
 function todayKey() {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
@@ -40,7 +44,7 @@ export default function Home() {
   (miniKit as unknown as { context?: { user?: unknown } }).context?.user;
 
 
-  const address = user?.address;
+  const address = (user as MiniKitUser | undefined)?.address;
 
   // Client hesaplanan anahtarlar
   const [dateKey, setDateKey] = useState<string>("");
