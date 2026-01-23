@@ -2,6 +2,10 @@
 
 import { useMiniKit } from "@coinbase/onchainkit/minikit";
 import { useEffect, useMemo, useRef, useState } from "react";
+type Cell = {
+  text: string;
+  done: boolean;
+};
 
 type Cell = {
   id: string;
@@ -249,7 +253,7 @@ export default function Home() {
         {cells.length === 0 ? (
           <div style={{ opacity: 0.7, fontSize: 13 }}>Yükleniyor…</div>
         ) : (
-          cells.map((c) => (
+          cells.map((c: Cell) => (
             <button
               key={c.id}
               onClick={() => toggle(c.id)}
