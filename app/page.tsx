@@ -2,10 +2,7 @@
 
 import { useMiniKit } from "@coinbase/onchainkit/minikit";
 import { useEffect, useMemo, useRef, useState } from "react";
-type Cell = {
-  text: string;
-  done: boolean;
-};
+
 
 type Cell = {
   id: string;
@@ -37,7 +34,12 @@ const TASK_POOL = [
 ];
 
 export default function Home() {
-  const { user } = useMiniKit();
+  const miniKit = useMiniKit();
+  const user =
+  (miniKit as unknown as { user?: unknown }).user ??
+  (miniKit as unknown as { context?: { user?: unknown } }).context?.user;
+
+
   const address = user?.address;
 
   // Client hesaplanan anahtarlar
@@ -104,7 +106,7 @@ export default function Home() {
     }
 
     try {
-      const parsed = JSON.parse(saved) as any[];
+      const parsed = JSON.parse(saved) as Cell[];
       const normalized: Cell[] = parsed.map((c, i) => ({
         id: String(c.id ?? `${seedKey}-${i}`),
         pos: typeof c.pos === "number" ? c.pos : i,
