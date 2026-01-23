@@ -3,8 +3,8 @@
   "description": "A fun onchain Bingo mini app built on Base.",
   "category": "Games",
   "network": "Base",
-  "app_url": "https://YOUR_APP_URL",
-  "icon_url": "https://YOUR_APP_URL/icon.png",
+  "app_url": "https://base-bingo-rho.vercel.app",
+  "icon_url": "https://base-bingo-rho.vercel.app/icon.png",
   "developer": "Melih Ayata",
-  "source_code": "https://github.com/USERNAME/base-bingo"
+  "source_code": "https://github.com/Grfx60/base-bingo"
 }
