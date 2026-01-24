@@ -45,11 +45,14 @@ export default function Home() {
     actions?: { ready?: () => void };
   };
 
-  (miniKit as unknown as { user?: unknown }).user ??
-  (miniKit as unknown as { context?: { user?: unknown } }).context?.user;
+  useEffect(() => {
+    miniKit.ready?.();
+    miniKit.actions?.ready?.();
+  }, [miniKit]);
 
+  const user = miniKit.user ?? miniKit.context?.user;
+  const address = user?.address;
 
-  const address = (user as MiniKitUser | undefined)?.address;
 
   // Client hesaplanan anahtarlar
   const [dateKey, setDateKey] = useState<string>("");
