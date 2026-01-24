@@ -3,16 +3,11 @@
 import { useMiniKit } from "@coinbase/onchainkit/minikit";
 import { useEffect, useMemo, useRef, useState } from "react";
 
-
 type Cell = {
   id: string;
-  pos: number; // 0..8
+  pos: number;
   text: string;
   done: boolean;
-};
-
-type MiniKitUser = {
-  address?: string;
 };
 
 function todayKey() {
@@ -37,15 +32,22 @@ const TASK_POOL = [
   "Bir arkadaş etiketle",
 ];
 
-export default function Home() {
-  const miniKit = useMiniKit() as unknown as {
-    context?: { user?: { address?: string } };
-    user?: { address?: string };
-    ready?: () => void;
-    actions?: { ready?: () => void };
-  };
+type MiniKitLike = {
+  context?: { user?: { address?: string } };
+  user?: { address?: string };
+  ready?: () => void;
+  actions?: { ready?: () => void };
+};
 
+export default function HomeClient() {
+  const miniKit = useMiniKit() as unknown as MiniKitLike;
+
+  // ready'yi sadece 1 kere tetikle
+  const didReadyRef = useRef(false);
   useEffect(() => {
+    if (didReadyRef.current) return;
+    didReadyRef.current = true;
+
     miniKit.ready?.();
     miniKit.actions?.ready?.();
   }, [miniKit]);
@@ -53,19 +55,14 @@ export default function Home() {
   const user = miniKit.user ?? miniKit.context?.user;
   const address = user?.address;
 
-
   // Client hesaplanan anahtarlar
   const [dateKey, setDateKey] = useState<string>("");
   const [seedKey, setSeedKey] = useState<string>("guest:");
   const [storageKey, setStorageKey] = useState<string>("");
 
-  // Streak
   const [streak, setStreak] = useState<number>(0);
-
-  // "Bu storageKey için load yaptım mı?" bayrağı
   const loadedKeyRef = useRef<string | null>(null);
 
-  // 1) dateKey / seedKey / storageKey hesapla (client)
   useEffect(() => {
     const d = todayKey();
     const seed = `${address ?? "guest"}:${d}`;
@@ -74,7 +71,6 @@ export default function Home() {
     setStorageKey(`base-bingo:${seed}`);
   }, [address]);
 
-  // 2) Günlük kartı üret (seedKey'ye bağlı)
   const initialCells = useMemo<Cell[]>(() => {
     let seed = 0;
     for (let i = 0; i < seedKey.length; i++) {
@@ -100,14 +96,10 @@ export default function Home() {
     }));
   }, [seedKey]);
 
-  // 3) Cells state
   const [cells, setCells] = useState<Cell[]>([]);
 
-  // 4) storageKey hazır olunca: o anahtar için localStorage'dan yükle (her storageKey değişiminde 1 kez)
   useEffect(() => {
     if (!storageKey) return;
-
-    // aynı storageKey için tekrar tekrar yüklemeyelim
     if (loadedKeyRef.current === storageKey) return;
 
     const saved = localStorage.getItem(storageKey);
@@ -133,7 +125,6 @@ export default function Home() {
     }
   }, [storageKey, initialCells, seedKey]);
 
-  // 5) Streak hesapla (adres varsa)
   useEffect(() => {
     if (!address) return;
     if (!dateKey) return;
@@ -174,7 +165,6 @@ export default function Home() {
     }
   }, [address, dateKey]);
 
-  // 6) Toggle: storageKey hazır değilse tıklamayı blokla, hazırsa kaydet
   const toggle = (id: string) => {
     if (!storageKey) return;
 
@@ -185,7 +175,6 @@ export default function Home() {
     });
   };
 
-  // 7) Bingo hesaplama (pos üzerinden)
   const lines = [
     [0, 1, 2],
     [3, 4, 5],
@@ -200,19 +189,19 @@ export default function Home() {
   const doneByPos = new Map<number, boolean>(cells.map((c) => [c.pos, c.done]));
   const bingoCount = lines.filter((line) => line.every((p) => doneByPos.get(p))).length;
 
-  // 8) Reset: hem UI hem localStorage temizlensin
   const resetToday = () => {
     if (storageKey) localStorage.removeItem(storageKey);
     setCells(initialCells);
   };
 
-  // 9) Share (UI'da gösterdiğimiz dateKey ile)
+  // Render sırasında todayKey() çağırmıyoruz
   const shareText = encodeURIComponent(
-    `Base Bingo (${dateKey || todayKey()}) — ${bingoCount} bingo! 🎯\nBenimle oyna:`
+    `Base Bingo (${dateKey || "today"}) — ${bingoCount} bingo! 🎯\nBenimle oyna:`
   );
 
   return (
     <main style={{ maxWidth: 720, margin: "0 auto", padding: 20, fontFamily: "system-ui" }}>
+      {/* ... senin UI aynen devam ... */}
       <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
         <div>
           <h1 style={{ margin: 0, fontSize: 28 }}>Base Bingo</h1>
