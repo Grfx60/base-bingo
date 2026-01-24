@@ -38,8 +38,13 @@ const TASK_POOL = [
 ];
 
 export default function Home() {
-  const miniKit = useMiniKit();
-  const user =
+  const miniKit = useMiniKit() as unknown as {
+    context?: { user?: { address?: string } };
+    user?: { address?: string };
+    ready?: () => void;
+    actions?: { ready?: () => void };
+  };
+
   (miniKit as unknown as { user?: unknown }).user ??
   (miniKit as unknown as { context?: { user?: unknown } }).context?.user;
 
