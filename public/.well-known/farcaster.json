@@ -7,14 +7,14 @@
 
   "miniapp": {
     "version": "1",
-    "name": "base-bingo",
+    "name": "Base Bingo",
     "iconUrl": "https://base-bingo-rho.vercel.app/icon.png",
     "splashImageUrl": "https://base-bingo-rho.vercel.app/splash.png",
     "splashBackgroundColor": "#000000",
     "homeUrl": "https://base-bingo-rho.vercel.app",
     "webhookUrl": "https://base-bingo-rho.vercel.app/api/webhook",
     "primaryCategory": "utility",
-    "tags": ["example"],
+    "tags": ["bingo", "daily", "streak", "base", "utility"],
     "heroImageUrl": "https://base-bingo-rho.vercel.app/hero.png",
     "ogImageUrl": "https://base-bingo-rho.vercel.app/hero.png"
   },
