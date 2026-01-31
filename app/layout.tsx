@@ -37,22 +37,19 @@ const sourceCodePro = Source_Code_Pro({
 
 export default function RootLayout({
   children,
-}: Readonly<{
+}: {
   children: React.ReactNode;
-}>) {
+}) {
   return (
     <html lang="en">
       <head>
         <meta
           name="base:app_id"
-          content="69745f333a92926b661fd2df"
+          content="697e42fa2aafa0bc9ad8a2fd"
         />
       </head>
-      <body className={`${inter.variable} ${sourceCodePro.variable}`}>
-        <RootProvider>
-          <SafeArea>{children}</SafeArea>
-        </RootProvider>
-      </body>
+      <body>{children}</body>
     </html>
   );
 }
+
