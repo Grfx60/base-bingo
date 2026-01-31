@@ -43,13 +43,13 @@ export default function RootLayout({
   return (
     <html lang="en">
       <head>
-        <meta
-          name="base:app_id"
-          content="697e42fa2aafa0bc9ad8a2fd"
-        />
+        <meta name="base:app_id" content="697e42fa2aafa0bc9ad8a2fd" />
       </head>
-      <body>{children}</body>
+      <body className={`${inter.variable} ${sourceCodePro.variable}`}>
+        <RootProvider>
+          <SafeArea>{children}</SafeArea>
+        </RootProvider>
+      </body>
     </html>
   );
 }
-
