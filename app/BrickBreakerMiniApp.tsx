@@ -272,20 +272,17 @@ export default function BrickBreakerMiniApp() {
 
     if (!signature) return null;
     return { address: from.toLowerCase(), signature };
-  }, []);
+}, []);
 
-  const fetchRemoteLeaderboard = useCallback(async (dId: string) => {
-    const res = await fetch(`/api/leaderboard?dailyId=${encodeURIComponent(dId)}&limit=10`);
-    const json = await safeJson(res);
+const fetchRemoteLeaderboard = useCallback(async (dId: string): Promise<void> => {
+  const res = await fetch(`/api/leaderboard?dailyId=${encodeURIComponent(dId)}&limit=10`);
+  const json = await safeJson(res);
 
-    if (!res.ok) {
-      const err = isRecord(json) ? String(json.error ?? "leaderboard fetch failed") : "leaderboard fetch failed";
-      throw new Error(err);
-    }
-
-    // Not rendering remote leaderboard yet; just "touch" endpoint
-    return;
-  }, []);
+  if (!res.ok) {
+    const err = isRecord(json) ? String(json.error ?? "leaderboard fetch failed") : "leaderboard fetch failed";
+    throw new Error(err);
+  }
+}, []);
 
   const submitRemoteScore = useCallback(
     async (finalScore: number, finalLevel: number) => {
