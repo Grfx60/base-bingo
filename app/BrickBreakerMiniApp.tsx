@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
 import { useMiniKit } from "@coinbase/onchainkit/minikit";
 
 type GameState = "idle" | "running" | "paused" | "gameover" | "win";
@@ -12,6 +13,30 @@ type LBEntry = { name: string; score: number; level: number; t: number };
 
 type PowerUpType = "widen" | "multiball" | "slow";
 type Drop = { x: number; y: number; vy: number; size: number; type: PowerUpType; alive: boolean };
+
+// ---------- EIP-1193 + window declarations (no-any) ----------
+type EIP1193RequestArgs = { method: string; params?: unknown[] | Record<string, unknown> };
+type EIP1193Provider = { request: <T = unknown>(args: EIP1193RequestArgs) => Promise<T> };
+
+declare global {
+  interface Window {
+    ethereum?: EIP1193Provider;
+    webkitAudioContext?: typeof AudioContext;
+  }
+}
+
+// ---------- small helpers ----------
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null;
+}
+
+async function safeJson(res: Response): Promise<unknown> {
+  try {
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
 
 function clamp(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, n));
@@ -104,7 +129,7 @@ export default function BrickBreakerMiniApp() {
   const [lbOpen, setLbOpen] = useState(false);
   const [lb, setLb] = useState<LBEntry[]>([]);
 
-  // --- Backend leaderboard (Supabase via /api/leaderboard)
+  // --- Backend leaderboard
   type RemoteLBItem = { address: string; score: number; level: number; created_at: string };
   const [remoteLb, setRemoteLb] = useState<RemoteLBItem[]>([]);
 
@@ -122,7 +147,6 @@ export default function BrickBreakerMiniApp() {
   const pointerDownRef = useRef(false);
 
   const shimmerTRef = useRef<number>(0);
-
   const [scale, setScale] = useState(1);
 
   // Paddle smoothing
@@ -143,11 +167,12 @@ export default function BrickBreakerMiniApp() {
   const audioCtxRef = useRef<AudioContext | null>(null);
   const ensureAudio = useCallback(() => {
     if (audioCtxRef.current) return audioCtxRef.current;
-    const AnyAudioCtx = (window.AudioContext || (window as any).webkitAudioContext) as typeof AudioContext | undefined;
+    const AnyAudioCtx = window.AudioContext ?? window.webkitAudioContext;
     if (!AnyAudioCtx) return null;
     audioCtxRef.current = new AnyAudioCtx();
     return audioCtxRef.current;
   }, []);
+
   const beep = useCallback(
     (freq: number, durMs: number, gain: number) => {
       if (!soundOn) return;
@@ -173,10 +198,9 @@ export default function BrickBreakerMiniApp() {
   const haptic = useCallback(
     (ms: number) => {
       if (!hapticsOn) return;
-      // @ts-ignore
-      if (typeof navigator !== "undefined" && navigator.vibrate) {
-        // @ts-ignore
-        navigator.vibrate(ms);
+      if (typeof navigator !== "undefined" && "vibrate" in navigator) {
+        const vib = (navigator as Navigator & { vibrate?: (pattern: number | number[]) => boolean }).vibrate;
+        vib?.(ms);
       }
     },
     [hapticsOn]
@@ -238,14 +262,14 @@ export default function BrickBreakerMiniApp() {
   const randomNonce = useCallback(() => `${Date.now()}_${Math.random().toString(16).slice(2)}`, []);
 
   const signMessageCompat = useCallback(async (message: string): Promise<{ address: string; signature: string } | null> => {
-    const eth = (window as any).ethereum;
+    const eth = typeof window !== "undefined" ? window.ethereum : undefined;
     if (!eth?.request) return null;
 
-    const accounts: string[] = await eth.request({ method: "eth_requestAccounts" });
+    const accounts = await eth.request<string[]>({ method: "eth_requestAccounts" });
     const from = accounts?.[0];
     if (!from) return null;
 
-    const signature: string = await eth.request({
+    const signature = await eth.request<string>({
       method: "personal_sign",
       params: [message, from],
     });
@@ -256,9 +280,15 @@ export default function BrickBreakerMiniApp() {
 
   const fetchRemoteLeaderboard = useCallback(async (dId: string) => {
     const res = await fetch(`/api/leaderboard?dailyId=${encodeURIComponent(dId)}&limit=10`);
-    const json = await res.json().catch(() => ({} as any));
-    if (!res.ok) throw new Error((json as any)?.error || "leaderboard fetch failed");
-    return (((json as any)?.items ?? []) as RemoteLBItem[]) ?? [];
+    const json = await safeJson(res);
+
+    if (!res.ok) {
+      const err = isRecord(json) ? String(json.error ?? "leaderboard fetch failed") : "leaderboard fetch failed";
+      throw new Error(err);
+    }
+
+    const items = isRecord(json) && Array.isArray(json.items) ? (json.items as RemoteLBItem[]) : [];
+    return items;
   }, []);
 
   const submitRemoteScore = useCallback(
@@ -286,8 +316,11 @@ export default function BrickBreakerMiniApp() {
         }),
       });
 
-      const json = await res.json().catch(() => ({} as any));
-      if (!res.ok) throw new Error((json as any)?.error || "submit failed");
+      const json = await safeJson(res);
+      if (!res.ok) {
+        const err = isRecord(json) ? String(json.error ?? "submit failed") : "submit failed";
+        throw new Error(err);
+      }
     },
     [dailyId, practiceMode, randomNonce, signMessageCompat]
   );
@@ -303,6 +336,7 @@ export default function BrickBreakerMiniApp() {
       if (typeof obj.hapticsOn === "boolean") setHapticsOn(obj.hapticsOn);
     } catch {}
   }, [userKey, keyPrefs]);
+
   useEffect(() => {
     try {
       localStorage.setItem(keyPrefs(), JSON.stringify({ soundOn, hapticsOn }));
@@ -568,7 +602,6 @@ export default function BrickBreakerMiniApp() {
         .then(() => fetchRemoteLeaderboard(dailyId).then(setRemoteLb).catch(() => {}))
         .catch(() => {
           // sessiz geçiyoruz (istersen toast aç)
-          // showToast("Remote submit failed", 1200);
         });
 
       showToast(finalState === "win" ? "Saved to leaderboard 🏆" : "Score saved 🏆", 1200);
@@ -704,12 +737,13 @@ export default function BrickBreakerMiniApp() {
       `#Base #Onchain #MiniApp`;
 
     try {
-      // @ts-ignore
-      if (navigator.share) {
-        // @ts-ignore
-        await navigator.share({ text });
-        showToast("Shared ✅", 1200);
-        return;
+      if (typeof navigator !== "undefined" && "share" in navigator) {
+        const shareFn = (navigator as Navigator & { share?: (data: { text?: string }) => Promise<void> }).share;
+        if (shareFn) {
+          await shareFn({ text });
+          showToast("Shared ✅", 1200);
+          return;
+        }
       }
     } catch {}
 
@@ -1110,7 +1144,6 @@ export default function BrickBreakerMiniApp() {
     level,
     lives,
     loseLifeOrBall,
-    makeLevelBricks,
     maybeUpdateDailyBest,
     practiceInfiniteLives,
     practiceMode,
@@ -1145,12 +1178,12 @@ export default function BrickBreakerMiniApp() {
   return (
     <div ref={containerRef} className="min-h-[100dvh] bg-black text-white w-full max-w-[520px] mx-auto px-3 py-4">
       <div className="mb-3 flex items-center gap-2">
-        <a
+        <Link
           href="/"
           className="h-10 px-3 rounded-2xl bg-white/10 text-white font-semibold border border-white/15 inline-flex items-center active:scale-[0.99]"
         >
           ←
-        </a>
+        </Link>
 
         <div className="flex-1">
           <div className="text-sm font-semibold leading-tight">Brick Breaker</div>
@@ -1170,7 +1203,6 @@ export default function BrickBreakerMiniApp() {
                 haptic(20);
                 beep(next ? 500 : 700, 40, 0.02);
 
-                // reset run feel
                 setPracticeInfiniteLives(false);
                 setScore(0);
                 setLives(3);
@@ -1321,7 +1353,7 @@ export default function BrickBreakerMiniApp() {
                 * Leaderboard is local (device-only) mock. Practice mode doesn’t save here.
               </div>
 
-              {/* remoteLb state is ready if you want to render it later */}
+              {/* remoteLb hazır; istersen render edebilirsin */}
               {/* <pre className="mt-3 text-[10px] text-white/30">{JSON.stringify(remoteLb, null, 2)}</pre> */}
             </div>
           </div>
