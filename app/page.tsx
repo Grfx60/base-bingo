@@ -1,290 +1,91 @@
 "use client";
+import React, { useEffect, useState } from "react";
+import Link from "next/link";
 
-import { useMiniKit } from "@coinbase/onchainkit/minikit";
-import { useEffect, useMemo, useRef, useState } from "react";
-
-type Cell = {
-  id: string;
-  pos: number;
-  text: string;
-  done: boolean;
-};
-
-function todayKey() {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
-    d.getDate()
-  ).padStart(2, "0")}`;
+function BrickIcon() {
+  return (
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" className="opacity-90">
+      <path d="M4 7h8v4H4V7Zm10 0h6v4h-6V7ZM4 13h6v4H4v-4Zm8 0h8v4h-8v-4Z" stroke="currentColor" strokeWidth="1.6" />
+    </svg>
+  );
 }
 
-const TASK_POOL = [
-  "Bugün 1 mini app aç",
-  "Feed’de 1 post beğen",
-  "Bir arkadaşına paylaş",
-  "Profiline bak",
-  "1 yorum bırak",
-  "Bugün 1 yeni hesap takip et",
-  "Bir postu kaydet",
-  "1 dakika keşfet",
-  "Bugün geri gel (streak)",
-  "Bir mini app’e oy ver",
-  "Bir postu repost et",
-  "Bir arkadaş etiketle",
-];
-
-type MiniKitLike = {
-  context?: { user?: { address?: string } };
-  user?: { address?: string };
-  ready?: () => void;
-  actions?: { ready?: () => void };
-};
-
-export default function HomeClient() {
-  const miniKit = useMiniKit() as unknown as MiniKitLike;
-
-  // ready'yi sadece 1 kere tetikle
-  const didReadyRef = useRef(false);
-  useEffect(() => {
-    if (didReadyRef.current) return;
-    didReadyRef.current = true;
-
-    miniKit.ready?.();
-    miniKit.actions?.ready?.();
-  }, [miniKit]);
-
-  const user = miniKit.user ?? miniKit.context?.user;
-  const address = user?.address;
-
-  // Client hesaplanan anahtarlar
-  const [dateKey, setDateKey] = useState<string>("");
-  const [seedKey, setSeedKey] = useState<string>("guest:");
-  const [storageKey, setStorageKey] = useState<string>("");
-
-  const [streak, setStreak] = useState<number>(0);
-  const loadedKeyRef = useRef<string | null>(null);
-
-  useEffect(() => {
-    const d = todayKey();
-    const seed = `${address ?? "guest"}:${d}`;
-    setDateKey(d);
-    setSeedKey(seed);
-    setStorageKey(`base-bingo:${seed}`);
-  }, [address]);
-
-  const initialCells = useMemo<Cell[]>(() => {
-    let seed = 0;
-    for (let i = 0; i < seedKey.length; i++) {
-      seed = (seed * 31 + seedKey.charCodeAt(i)) >>> 0;
-    }
-
-    const pick = (n: number) => {
-      seed = (seed * 1664525 + 1013904223) >>> 0;
-      return seed % n;
-    };
-
-    const chosen: string[] = [];
-    while (chosen.length < 9) {
-      const t = TASK_POOL[pick(TASK_POOL.length)];
-      if (!chosen.includes(t)) chosen.push(t);
-    }
-
-    return chosen.map((text, idx) => ({
-      id: `${seedKey}-${idx}`,
-      pos: idx,
-      text,
-      done: false,
-    }));
-  }, [seedKey]);
-
-  const [cells, setCells] = useState<Cell[]>([]);
-
-  useEffect(() => {
-    if (!storageKey) return;
-    if (loadedKeyRef.current === storageKey) return;
-
-    const saved = localStorage.getItem(storageKey);
-    if (!saved) {
-      setCells(initialCells);
-      loadedKeyRef.current = storageKey;
-      return;
-    }
-
-    try {
-      const parsed = JSON.parse(saved) as Cell[];
-      const normalized: Cell[] = parsed.map((c, i) => ({
-        id: String(c.id ?? `${seedKey}-${i}`),
-        pos: typeof c.pos === "number" ? c.pos : i,
-        text: String(c.text ?? initialCells[i]?.text ?? ""),
-        done: Boolean(c.done),
-      }));
-      setCells(normalized);
-    } catch {
-      setCells(initialCells);
-    } finally {
-      loadedKeyRef.current = storageKey;
-    }
-  }, [storageKey, initialCells, seedKey]);
-
-  useEffect(() => {
-    if (!address) return;
-    if (!dateKey) return;
-
-    const streakKey = `base-bingo:streak:${address}`;
-    const raw = localStorage.getItem(streakKey);
-
-    if (!raw) {
-      localStorage.setItem(streakKey, JSON.stringify({ lastDate: dateKey, count: 1 }));
-      setStreak(1);
-      return;
-    }
-
-    try {
-      const data = JSON.parse(raw) as { lastDate: string; count: number };
-
-      if (data.lastDate === dateKey) {
-        setStreak(data.count);
-        return;
-      }
-
-      const last = new Date(data.lastDate);
-      const curr = new Date(dateKey);
-      const diffDays = (curr.getTime() - last.getTime()) / (1000 * 60 * 60 * 24);
-
-      if (diffDays === 1) {
-        const next = data.count + 1;
-        localStorage.setItem(streakKey, JSON.stringify({ lastDate: dateKey, count: next }));
-        setStreak(next);
-      } else {
-        localStorage.setItem(streakKey, JSON.stringify({ lastDate: dateKey, count: 1 }));
-        setStreak(1);
-      }
-    } catch {
-      localStorage.removeItem(streakKey);
-      localStorage.setItem(streakKey, JSON.stringify({ lastDate: dateKey, count: 1 }));
-      setStreak(1);
-    }
-  }, [address, dateKey]);
-
-  const toggle = (id: string) => {
-    if (!storageKey) return;
-
-    setCells((prev) => {
-      const next = prev.map((c) => (c.id === id ? { ...c, done: !c.done } : c));
-      localStorage.setItem(storageKey, JSON.stringify(next));
-      return next;
-    });
-  };
-
-  const lines = [
-    [0, 1, 2],
-    [3, 4, 5],
-    [6, 7, 8],
-    [0, 3, 6],
-    [1, 4, 7],
-    [2, 5, 8],
-    [0, 4, 8],
-    [2, 4, 6],
-  ];
-
-  const doneByPos = new Map<number, boolean>(cells.map((c) => [c.pos, c.done]));
-  const bingoCount = lines.filter((line) => line.every((p) => doneByPos.get(p))).length;
-
-  const resetToday = () => {
-    if (storageKey) localStorage.removeItem(storageKey);
-    setCells(initialCells);
-  };
-
-  // Render sırasında todayKey() çağırmıyoruz
-  const shareText = encodeURIComponent(
-    `Base Bingo (${dateKey || "today"}) — ${bingoCount} bingo! 🎯\nBenimle oyna:`
+function BingoIcon() {
+  return (
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" className="opacity-90">
+      <path d="M6 7h12M6 12h12M6 17h12" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+      <path d="M8 5v14M12 5v14M16 5v14" stroke="currentColor" strokeWidth="1.2" opacity="0.6" />
+    </svg>
   );
+}
+
+export default function Home() {
+  const [dailyBest, setDailyBest] = useState<number>(0);
+
+useEffect(() => {
+  const d = new Date();
+  const dailyId = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  const key = `bb_daily_best_${dailyId}`;
+  const raw = localStorage.getItem(key);
+  const n = raw ? Number(raw) : 0;
+  setDailyBest(Number.isFinite(n) ? n : 0);
+}, []);
 
   return (
-    <main style={{ maxWidth: 720, margin: "0 auto", padding: 20, fontFamily: "system-ui" }}>
-      {/* ... senin UI aynen devam ... */}
-      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
-        <div>
-          <h1 style={{ margin: 0, fontSize: 28 }}>Base Bingo</h1>
-
-          {address ? (
-            <p style={{ marginTop: 6, fontSize: 12, opacity: 0.7 }}>
-              Connected: {address.slice(0, 6)}…{address.slice(-4)} • 🔥 Streak: <b>{streak}</b> gün
-            </p>
-          ) : (
-            <p style={{ marginTop: 6, fontSize: 12, opacity: 0.7 }}>
-              (Guest mod) BaseApp içinde açınca streak adresine bağlanır.
-            </p>
-          )}
-
-          <p style={{ margin: "6px 0 0", opacity: 0.8 }}>
-            Günlük kart • {dateKey || "—"} • Bingo: <b>{bingoCount}</b>
-          </p>
+    <div className="min-h-[100dvh] bg-black text-white px-4 py-6">
+      <div className="max-w-[520px] mx-auto">
+        <div className="mb-6">
+          <h1 className="text-2xl font-extrabold tracking-tight">Base Bingo</h1>
+          <p className="text-white/70 mt-1">Mini games inside Base App. Pick a game 👇</p>
         </div>
 
-        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-          <button
-            onClick={resetToday}
-            style={{
-              padding: "10px 12px",
-              borderRadius: 10,
-              border: "1px solid rgba(0,0,0,0.15)",
-              background: "white",
-              cursor: "pointer",
-            }}
+        <div className="grid gap-3">
+          <Link
+            href="/brick-breaker"
+            className="block rounded-3xl border border-white/15 bg-white/8 p-4 shadow-[0_0_0_1px_rgba(255,255,255,0.06)]
+                       active:scale-[0.99] transition"
           >
-            Sıfırla
-          </button>
-
-          <a
-            href={`https://warpcast.com/~/compose?text=${shareText}`}
-            target="_blank"
-            rel="noreferrer"
-            style={{
-              padding: "10px 12px",
-              borderRadius: 10,
-              border: "1px solid rgba(0,0,0,0.15)",
-              textDecoration: "none",
-              display: "inline-block",
-            }}
-          >
-            Paylaş
-          </a>
-        </div>
-      </div>
-
-      <div style={{ marginTop: 18, display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10 }}>
-        {cells.length === 0 ? (
-          <div style={{ opacity: 0.7, fontSize: 13 }}>Yükleniyor…</div>
-        ) : (
-          cells.map((c: Cell) => (
-            <button
-              key={c.id}
-              onClick={() => toggle(c.id)}
-              style={{
-                minHeight: 90,
-                padding: 12,
-                borderRadius: 16,
-                border: "1px solid rgba(0,0,0,0.15)",
-                background: c.done ? "rgba(0,0,0,0.08)" : "white",
-                cursor: storageKey ? "pointer" : "not-allowed",
-                textAlign: "left",
-                lineHeight: 1.25,
-                opacity: storageKey ? 1 : 0.9,
-              }}
-              disabled={!storageKey}
-            >
-              <div style={{ fontSize: 12, opacity: 0.7, marginBottom: 6 }}>
-                {c.done ? "✅ Tamam" : "⬜ Boş"}
+            <div className="flex items-center gap-3">
+              <div className="h-11 w-11 rounded-2xl bg-white/10 border border-white/15 flex items-center justify-center">
+                <BrickIcon />
               </div>
-              <div style={{ fontSize: 14, fontWeight: 600 }}>{c.text}</div>
-            </button>
-          ))
-        )}
-      </div>
 
-      <div style={{ marginTop: 16, opacity: 0.8, fontSize: 13 }}>
-        ✅ Kart kullanıcıya özel • ✅ Seçimler kaydediliyor • ✅ Streak hazır
+              <div className="flex-1 relative">
+                <div className="flex items-center gap-2">
+  <div className="text-lg font-extrabold leading-tight">Brick Breaker</div>
+
+  <div className="... inline-flex items-center">
+  <span className="text-white/60 mr-1">Today</span>
+  <span className="font-bold">{dailyBest > 0 ? dailyBest : "New"}</span>
+</div>
+
+</div>
+
+                <div className="text-sm text-white/70 mt-1">
+                  Tap to launch, drag to move. Beat levels, chase score.
+                             </div>
+              </div>
+            </div>
+          </Link>
+
+          <div className="rounded-3xl border border-white/10 bg-white/5 p-4 opacity-70">
+            <div className="flex items-center gap-3">
+              <div className="h-11 w-11 rounded-2xl bg-white/10 border border-white/15 flex items-center justify-center">
+                <BingoIcon />
+              </div>
+
+              <div className="flex-1">
+                <div className="text-lg font-extrabold leading-tight">Bingo</div>
+                <div className="text-sm text-white/70 mt-1">Coming soon…</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-6 rounded-2xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-white/70">
+          Tip: Daily challenge + share score = growth 🚀
+        </div>
       </div>
-    </main>
+    </div>
   );
 }
