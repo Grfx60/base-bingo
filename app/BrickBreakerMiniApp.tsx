@@ -129,10 +129,6 @@ export default function BrickBreakerMiniApp() {
   const [lbOpen, setLbOpen] = useState(false);
   const [lb, setLb] = useState<LBEntry[]>([]);
 
-  // --- Backend leaderboard
-  type RemoteLBItem = { address: string; score: number; level: number; created_at: string };
-  const [remoteLb, setRemoteLb] = useState<RemoteLBItem[]>([]);
-
   // --- UI toast
   const [toast, setToast] = useState<string | null>(null);
   const toastTimerRef = useRef<number | null>(null);
@@ -258,7 +254,7 @@ export default function BrickBreakerMiniApp() {
     return () => window.removeEventListener("resize", compute);
   }, []);
 
-  // ---------------- Remote leaderboard helpers (clean + stable) ----------------
+  // ---------------- Remote leaderboard helpers (best-effort; no state) ----------------
   const randomNonce = useCallback(() => `${Date.now()}_${Math.random().toString(16).slice(2)}`, []);
 
   const signMessageCompat = useCallback(async (message: string): Promise<{ address: string; signature: string } | null> => {
@@ -286,9 +282,8 @@ export default function BrickBreakerMiniApp() {
       const err = isRecord(json) ? String(json.error ?? "leaderboard fetch failed") : "leaderboard fetch failed";
       throw new Error(err);
     }
-
-    const items = isRecord(json) && Array.isArray(json.items) ? (json.items as RemoteLBItem[]) : [];
-    return items;
+    // items is optional; we just "touch" endpoint for now
+    return;
   }, []);
 
   const submitRemoteScore = useCallback(
@@ -355,11 +350,9 @@ export default function BrickBreakerMiniApp() {
     }
   }, [dailyId, keyLeaderboard]);
 
-  // leaderboard load (remote)
+  // leaderboard load (remote) - best effort, no state
   useEffect(() => {
-    fetchRemoteLeaderboard(dailyId)
-      .then(setRemoteLb)
-      .catch(() => {});
+    fetchRemoteLeaderboard(dailyId).catch(() => {});
   }, [dailyId, fetchRemoteLeaderboard]);
 
   const saveLeaderboard = useCallback(
@@ -599,10 +592,8 @@ export default function BrickBreakerMiniApp() {
 
       // remote (best-effort)
       submitRemoteScore(score, level)
-        .then(() => fetchRemoteLeaderboard(dailyId).then(setRemoteLb).catch(() => {}))
-        .catch(() => {
-          // sessiz geçiyoruz (istersen toast aç)
-        });
+        .then(() => fetchRemoteLeaderboard(dailyId).catch(() => {}))
+        .catch(() => {});
 
       showToast(finalState === "win" ? "Saved to leaderboard 🏆" : "Score saved 🏆", 1200);
     },
@@ -1352,9 +1343,6 @@ export default function BrickBreakerMiniApp() {
               <div className="mt-4 text-[11px] text-white/50">
                 * Leaderboard is local (device-only) mock. Practice mode doesn’t save here.
               </div>
-
-              {/* remoteLb hazır; istersen render edebilirsin */}
-              {/* <pre className="mt-3 text-[10px] text-white/30">{JSON.stringify(remoteLb, null, 2)}</pre> */}
             </div>
           </div>
         </div>
