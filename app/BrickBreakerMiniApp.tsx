@@ -282,7 +282,8 @@ export default function BrickBreakerMiniApp() {
       const err = isRecord(json) ? String(json.error ?? "leaderboard fetch failed") : "leaderboard fetch failed";
       throw new Error(err);
     }
-    // items is optional; we just "touch" endpoint for now
+
+    // Not rendering remote leaderboard yet; just "touch" endpoint
     return;
   }, []);
 
