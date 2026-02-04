@@ -284,6 +284,7 @@ const fetchRemoteLeaderboard = useCallback(async (dId: string): Promise<void> =>
   }
 }, []);
 
+
   const submitRemoteScore = useCallback(
     async (finalScore: number, finalLevel: number) => {
       if (practiceMode) return;
