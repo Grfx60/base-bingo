@@ -130,7 +130,7 @@ export default function BrickBreakerMiniApp() {
   const [streak, setStreak] = useState<number>(0);
 
   // --- Attempts
-  const DAILY_ATTEMPTS = 3;
+  const DAILY_ATTEMPTS = Infinity;
   const [attemptsLeft, setAttemptsLeft] = useState<number>(DAILY_ATTEMPTS);
   const attemptsLeftRef = useRef<number>(DAILY_ATTEMPTS);
 
@@ -453,6 +453,11 @@ export default function BrickBreakerMiniApp() {
 
   // Attempts
   useEffect(() => {
+    if (DAILY_ATTEMPTS === Infinity) {
+  setAttemptsLeft(Infinity);
+  attemptsLeftRef.current = Infinity;
+  return;
+}
     const saved = localStorage.getItem(keyDailyAttempts());
     if (saved === null) {
       localStorage.setItem(keyDailyAttempts(), String(DAILY_ATTEMPTS));
@@ -552,6 +557,7 @@ export default function BrickBreakerMiniApp() {
 
   const spendAttemptIfNeeded = useCallback((): boolean => {
     if (practiceMode) return true;
+    if (DAILY_ATTEMPTS === Infinity) return true;
     if (gameStateRef.current !== "idle") return true;
 
     const current = attemptsLeftRef.current;
@@ -1255,7 +1261,7 @@ export default function BrickBreakerMiniApp() {
             <span className="px-2 py-0.5 rounded-xl bg-white/10 border border-white/15">Best {todayBest}</span>
             <span className="px-2 py-0.5 rounded-xl bg-white/10 border border-white/15">🔥 Streak {streak}</span>
             <span className="px-2 py-0.5 rounded-xl bg-white/10 border border-white/15">
-              🎟 Attempts {practiceMode ? "∞" : `${attemptsLeft}/${DAILY_ATTEMPTS}`}
+              🎟 Attempts {practiceMode || DAILY_ATTEMPTS === Infinity ? "∞" : `${attemptsLeft}/${DAILY_ATTEMPTS}`}
             </span>
 
             {renderPillButton(practiceMode ? "🧪 Practice" : "🎯 Daily", () => {
