@@ -15,8 +15,9 @@ type PowerUpType = "widen" | "multiball" | "slow";
 type Drop = { x: number; y: number; vy: number; size: number; type: PowerUpType; alive: boolean };
 
 // Remote LB entry (normalized for UI; keep address for "You" highlight)
-type RemoteLBEntry = { name: string; score: number; level: number; t: number; address?: string };
+type RemoteLBEntry = { name: string; score: number; level: number; t: number; address: string };
 
+// ---------- EIP-1193 + window declarations (no-any) ----------
 type EIP1193RequestArgs = { method: string; params?: unknown[] | Record<string, unknown> };
 type EIP1193Provider = { request: <T = unknown>(args: EIP1193RequestArgs) => Promise<T> };
 
@@ -27,6 +28,7 @@ declare global {
   }
 }
 
+// ---------- small helpers ----------
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null;
 }
@@ -116,12 +118,8 @@ export default function BrickBreakerMiniApp() {
   // Keep latest score/level for accurate commits (avoid stale closure)
   const scoreRef = useRef(0);
   const levelRef = useRef(1);
-  useEffect(() => {
-    scoreRef.current = score;
-  }, [score]);
-  useEffect(() => {
-    levelRef.current = level;
-  }, [level]);
+  useEffect(() => void (scoreRef.current = score), [score]);
+  useEffect(() => void (levelRef.current = level), [level]);
 
   // --- Daily meta
   const [todayBest, setTodayBest] = useState<number>(0);
@@ -129,8 +127,8 @@ export default function BrickBreakerMiniApp() {
 
   // --- Attempts (UNLIMITED)
   const DAILY_ATTEMPTS = Infinity;
-  const [attemptsLeft, setAttemptsLeft] = useState<number>(DAILY_ATTEMPTS);
-  const attemptsLeftRef = useRef<number>(DAILY_ATTEMPTS);
+  const [attemptsLeft, setAttemptsLeft] = useState<number>(Infinity);
+  const attemptsLeftRef = useRef<number>(Infinity);
 
   // --- Preferences
   const [soundOn, setSoundOn] = useState<boolean>(false);
@@ -225,12 +223,8 @@ export default function BrickBreakerMiniApp() {
   }, []);
 
   // Sync refs
-  useEffect(() => {
-    gameStateRef.current = gameState;
-  }, [gameState]);
-  useEffect(() => {
-    attemptsLeftRef.current = attemptsLeft;
-  }, [attemptsLeft]);
+  useEffect(() => void (gameStateRef.current = gameState), [gameState]);
+  useEffect(() => void (attemptsLeftRef.current = attemptsLeft), [attemptsLeft]);
 
   // MiniKit lifecycle
   useEffect(() => {
@@ -252,7 +246,6 @@ export default function BrickBreakerMiniApp() {
 
   // storage keys
   const keyDailyBest = useCallback(() => `bb_${userKeyRef.current}_daily_best_${dailyIdRef.current}`, []);
-  const keyDailyAttempts = useCallback(() => `bb_${userKeyRef.current}_daily_attempts_${dailyIdRef.current}`, []);
   const keyStreakLast = useCallback(() => `bb_${userKeyRef.current}_streak_last`, []);
   const keyStreakCount = useCallback(() => `bb_${userKeyRef.current}_streak_count`, []);
   const keyPrefs = useCallback(() => `bb_${userKeyRef.current}_prefs`, []);
@@ -302,15 +295,15 @@ export default function BrickBreakerMiniApp() {
       throw new Error(err);
     }
 
-    // Your API returns: { ok: true, items: [...] }
+    // API: { ok: true, items: [...] }
     const entriesRaw = isRecord(json) ? (json.items ?? json.entries ?? json.data ?? json.leaderboard) : json;
     if (!Array.isArray(entriesRaw)) {
       setRemoteLb([]);
       return;
     }
 
-    const mapped: RemoteLBEntry[] = entriesRaw
-      .map((e: unknown) => {
+    const mapped = entriesRaw
+      .map((e: unknown): RemoteLBEntry | null => {
         if (!isRecord(e)) return null;
 
         const scoreN = Number(e.score);
@@ -322,19 +315,17 @@ export default function BrickBreakerMiniApp() {
         const t =
           typeof e.t === "number"
             ? e.t
-            : typeof e.createdAt === "number"
-              ? e.createdAt
-              : typeof e.createdAt === "string"
-                ? Date.parse(e.createdAt)
-                : typeof e.created_at === "string"
-                  ? Date.parse(e.created_at)
-                  : Date.now();
+            : typeof e.createdAt === "string"
+              ? Date.parse(e.createdAt)
+              : typeof e.created_at === "string"
+                ? Date.parse(e.created_at)
+                : Date.now();
 
         if (!Number.isFinite(scoreN) || !Number.isFinite(levelN)) return null;
 
         return { name, score: scoreN, level: levelN, t: Number.isFinite(t) ? t : Date.now(), address };
       })
-      .filter((x): x is RemoteLBEntry => Boolean(x));
+      .filter((x): x is RemoteLBEntry => x !== null);
 
     mapped.sort((a, b) => b.score - a.score || b.level - a.level || b.t - a.t);
     setRemoteLb(mapped.slice(0, 10));
@@ -456,24 +447,9 @@ export default function BrickBreakerMiniApp() {
 
   // Attempts (unlimited)
   useEffect(() => {
-    if (DAILY_ATTEMPTS === Infinity) {
-      setAttemptsLeft(Infinity);
-      attemptsLeftRef.current = Infinity;
-      return;
-    }
-
-    const saved = localStorage.getItem(keyDailyAttempts());
-    if (saved === null) {
-      localStorage.setItem(keyDailyAttempts(), String(DAILY_ATTEMPTS));
-      setAttemptsLeft(DAILY_ATTEMPTS);
-      attemptsLeftRef.current = DAILY_ATTEMPTS;
-    } else {
-      const n = Number(saved);
-      const val = Number.isFinite(n) ? n : DAILY_ATTEMPTS;
-      setAttemptsLeft(val);
-      attemptsLeftRef.current = val;
-    }
-  }, [dailyId, userKey, keyDailyAttempts, DAILY_ATTEMPTS]);
+    setAttemptsLeft(Infinity);
+    attemptsLeftRef.current = Infinity;
+  }, [dailyId, userKey]);
 
   const makeLevelBricks = useCallback(
     (lvl: number) => {
@@ -560,24 +536,10 @@ export default function BrickBreakerMiniApp() {
   );
 
   const spendAttemptIfNeeded = useCallback((): boolean => {
+    // Unlimited daily attempts:
     if (practiceMode) return true;
-    if (DAILY_ATTEMPTS === Infinity) return true;
-    if (gameStateRef.current !== "idle") return true;
-
-    const current = attemptsLeftRef.current;
-    if (current <= 0) {
-      showToast("No attempts left today ❌");
-      haptic(40);
-      beep(220, 60, 0.05);
-      return false;
-    }
-
-    const next = current - 1;
-    attemptsLeftRef.current = next;
-    setAttemptsLeft(next);
-    localStorage.setItem(keyDailyAttempts(), String(next));
     return true;
-  }, [practiceMode, DAILY_ATTEMPTS, beep, haptic, keyDailyAttempts, showToast]);
+  }, [practiceMode]);
 
   const baseBallSpeed = useCallback(() => {
     const now = performance.now();
@@ -743,7 +705,8 @@ export default function BrickBreakerMiniApp() {
           showToast("🎁 Multiball (max)", 900);
           return;
         }
-        const base = balls[0] ?? { x: paddleRef.current.x, y: paddleRef.current.y - 20, r: 7, vx: 0, vy: 0, launched: false };
+        const base =
+          balls[0] ?? ({ x: paddleRef.current.x, y: paddleRef.current.y - 20, r: 7, vx: 0, vy: 0, launched: false } as Ball);
         const speed = baseBallSpeed();
 
         const mkBall = (dir: number): Ball => ({
@@ -769,8 +732,7 @@ export default function BrickBreakerMiniApp() {
     const url = `${origin}/brick-breaker`;
 
     const modeLine = practiceMode ? `🧪 Practice Mode` : `🎯 Daily Mode`;
-    const attemptsLine =
-      practiceMode || DAILY_ATTEMPTS === Infinity ? `Attempts: ∞` : attemptsLeft <= 0 ? `⚠️ Out of attempts today` : `Attempts: ${attemptsLeft}/${DAILY_ATTEMPTS}`;
+    const attemptsLine = `Attempts: ∞`;
     const statusLine =
       gameState === "win"
         ? `✅ Cleared Level ${level}!`
@@ -810,59 +772,62 @@ export default function BrickBreakerMiniApp() {
 
   // pointer controls
   useEffect(() => {
-    const maybeCanvas = canvasRef.current;
-    if (!maybeCanvas) return;
-    const canvasEl: HTMLCanvasElement = maybeCanvas;
+  let canvasEl = canvasRef.current;
+  if (!canvasEl) return;
 
-    function toGameX(clientX: number) {
-      const rect = canvasEl.getBoundingClientRect();
-      return (clientX - rect.left) / scale;
-    }
+  const canvas = canvasEl; // local non-null snapshot
 
-    function onDown(e: PointerEvent) {
-      pointerDownRef.current = true;
-      canvasEl.setPointerCapture(e.pointerId);
+  function toGameX(clientX: number) {
+    const rect = canvas.getBoundingClientRect();
+    return (clientX - rect.left) / scale;
+  }
 
-      const gx = toGameX(e.clientX);
-      const p = paddleRef.current;
-      p.targetX = clamp(gx, p.w / 2 + ui.wall, GAME_W - p.w / 2 - ui.wall);
+  function onDown(e: PointerEvent) {
+    pointerDownRef.current = true;
+    canvas.setPointerCapture(e.pointerId);
 
-      const gs = gameStateRef.current;
-      if (gs === "idle") launchBalls();
-      else if (gs === "paused") {
-        setGameState("running");
-        haptic(10);
-        beep(360, 40, 0.02);
-      } else if (gs === "win") nextLevelFn();
-      else if (gs === "gameover") resetGame(1);
-    }
+    const gx = toGameX(e.clientX);
+    const p = paddleRef.current;
+    p.targetX = clamp(gx, p.w / 2 + ui.wall, GAME_W - p.w / 2 - ui.wall);
 
-    function onMove(e: PointerEvent) {
-      if (!pointerDownRef.current) return;
-      const gx = toGameX(e.clientX);
-      const p = paddleRef.current;
-      p.targetX = clamp(gx, p.w / 2 + ui.wall, GAME_W - p.w / 2 - ui.wall);
-    }
+    const gs = gameStateRef.current;
+    if (gs === "idle") launchBalls();
+    else if (gs === "paused") {
+      setGameState("running");
+      haptic(10);
+      beep(360, 40, 0.02);
+    } else if (gs === "win") nextLevelFn();
+    else if (gs === "gameover") resetGame(1);
+  }
 
-    function onUp(e: PointerEvent) {
-      pointerDownRef.current = false;
-      try {
-        canvasEl.releasePointerCapture(e.pointerId);
-      } catch {}
-    }
+  function onMove(e: PointerEvent) {
+    if (!pointerDownRef.current) return;
+    const gx = toGameX(e.clientX);
+    const p = paddleRef.current;
+    p.targetX = clamp(gx, p.w / 2 + ui.wall, GAME_W - p.w / 2 - ui.wall);
+  }
 
-    canvasEl.addEventListener("pointerdown", onDown, { passive: true });
-    canvasEl.addEventListener("pointermove", onMove, { passive: true });
-    canvasEl.addEventListener("pointerup", onUp);
-    canvasEl.addEventListener("pointercancel", onUp);
+  function onUp(e: PointerEvent) {
+    pointerDownRef.current = false;
+    try {
+      canvas.releasePointerCapture(e.pointerId);
+    } catch {}
+  }
 
-    return () => {
-      canvasEl.removeEventListener("pointerdown", onDown);
-      canvasEl.removeEventListener("pointermove", onMove);
-      canvasEl.removeEventListener("pointerup", onUp);
-      canvasEl.removeEventListener("pointercancel", onUp);
-    };
-  }, [beep, haptic, launchBalls, nextLevelFn, resetGame, scale, ui.wall]);
+  canvas.addEventListener("pointerdown", onDown, { passive: true });
+  canvas.addEventListener("pointermove", onMove, { passive: true });
+  canvas.addEventListener("pointerup", onUp);
+  canvas.addEventListener("pointercancel", onUp);
+
+  return () => {
+    canvas.removeEventListener("pointerdown", onDown);
+    canvas.removeEventListener("pointermove", onMove);
+    canvas.removeEventListener("pointerup", onUp);
+    canvas.removeEventListener("pointercancel", onUp);
+  };
+}, [beep, haptic, launchBalls, nextLevelFn, resetGame, scale, ui.wall]);
+
+
 
   // Commit leaderboard on gameover once (daily only)
   const lastCommittedStateRef = useRef<GameState>("idle");
@@ -1188,7 +1153,6 @@ export default function BrickBreakerMiniApp() {
     };
   }, [
     applyPowerUp,
-    attemptsLeft,
     beep,
     commitLeaderboardIfNeeded,
     gameState,
@@ -1228,7 +1192,7 @@ export default function BrickBreakerMiniApp() {
 
   return (
     <div ref={containerRef} className="min-h-[100dvh] bg-black text-white w-full max-w-[520px] mx-auto px-3 py-4">
-      {/* HEADER: make sure it stays clickable above canvas */}
+      {/* HEADER: clickable above canvas */}
       <div className="mb-3 flex items-center gap-2 relative z-20">
         <Link
           href="/"
@@ -1300,7 +1264,6 @@ export default function BrickBreakerMiniApp() {
               });
             })}
 
-            {/* Make leaderboard a guaranteed clickable button */}
             <button
               type="button"
               onClick={() => setLbOpen(true)}
@@ -1317,7 +1280,7 @@ export default function BrickBreakerMiniApp() {
         </div>
       </div>
 
-      {/* CANVAS wrapper: ensure it sits under header */}
+      {/* CANVAS */}
       <div className="rounded-3xl overflow-hidden border border-white/10 bg-white/5 shadow-[0_0_0_1px_rgba(255,255,255,0.05)] relative z-0">
         <canvas ref={canvasRef} className="block touch-none select-none" />
       </div>
@@ -1354,7 +1317,9 @@ export default function BrickBreakerMiniApp() {
           {shareLabel}
         </button>
 
-        <div className="ml-auto text-xs text-white/70">{practiceMode ? "Practice • Drag to move • Tap to launch" : "Drag to move • Tap to launch"}</div>
+        <div className="ml-auto text-xs text-white/70">
+          {practiceMode ? "Practice • Drag to move • Tap to launch" : "Drag to move • Tap to launch"}
+        </div>
       </div>
 
       {lbOpen && (
@@ -1407,11 +1372,13 @@ export default function BrickBreakerMiniApp() {
                           isMe ? "bg-white/10 border-white/30" : "bg-white/5 border-white/10"
                         }`}
                       >
-                        <div className={`w-6 font-extrabold tabular-nums ${isMe ? "text-white" : "text-white/70"}`}>{idx + 1}</div>
+                        <div className={`w-6 font-extrabold tabular-nums ${isMe ? "text-white" : "text-white/70"}`}>
+                          {idx + 1}
+                        </div>
 
                         <div className="flex-1">
                           <div className="flex items-center gap-2">
-                            <div className={`text-sm font-semibold ${isMe ? "text-white" : "text-white"}`}>{e.name}</div>
+                            <div className="text-sm font-semibold">{e.name}</div>
                             {isMe && (
                               <span className="text-[10px] px-2 py-0.5 rounded-xl bg-white/20 border border-white/20 text-white font-bold">
                                 YOU
@@ -1421,16 +1388,14 @@ export default function BrickBreakerMiniApp() {
                           <div className="text-[11px] text-white/60">Level {e.level}</div>
                         </div>
 
-                        <div className={`text-sm font-extrabold tabular-nums ${isMe ? "text-white" : "text-white"}`}>{e.score}</div>
+                        <div className="text-sm font-extrabold tabular-nums">{e.score}</div>
                       </div>
                     );
                   })}
                 </div>
               )}
 
-              <div className="mt-4 text-[11px] text-white/50">
-                * Showing: {boardLabel}. Your row is highlighted.
-              </div>
+              <div className="mt-4 text-[11px] text-white/50">* Showing: {boardLabel}. Your row is highlighted.</div>
             </div>
           </div>
         </div>
@@ -1438,7 +1403,9 @@ export default function BrickBreakerMiniApp() {
 
       {toast && (
         <div className="fixed left-0 right-0 bottom-5 flex justify-center pointer-events-none z-50">
-          <div className="px-3 py-2 rounded-2xl bg-black/80 border border-white/10 text-white text-sm shadow">{toast}</div>
+          <div className="px-3 py-2 rounded-2xl bg-black/80 border border-white/10 text-white text-sm shadow">
+            {toast}
+          </div>
         </div>
       )}
     </div>
