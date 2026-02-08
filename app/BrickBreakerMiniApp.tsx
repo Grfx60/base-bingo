@@ -14,6 +14,9 @@ type LBEntry = { name: string; score: number; level: number; t: number };
 type PowerUpType = "widen" | "multiball" | "slow";
 type Drop = { x: number; y: number; vy: number; size: number; type: PowerUpType; alive: boolean };
 
+// Remote LB entry (normalized for UI)
+type RemoteLBEntry = { name: string; score: number; level: number; t: number };
+
 // ---------- EIP-1193 + window declarations (no-any) ----------
 type EIP1193RequestArgs = { method: string; params?: unknown[] | Record<string, unknown> };
 type EIP1193Provider = { request: <T = unknown>(args: EIP1193RequestArgs) => Promise<T> };
@@ -112,6 +115,16 @@ export default function BrickBreakerMiniApp() {
   const [lives, setLives] = useState(3);
   const [level, setLevel] = useState(1);
 
+  // Keep latest score/level for accurate commits (avoid stale closure)
+  const scoreRef = useRef(0);
+  const levelRef = useRef(1);
+  useEffect(() => {
+    scoreRef.current = score;
+  }, [score]);
+  useEffect(() => {
+    levelRef.current = level;
+  }, [level]);
+
   // --- Daily meta
   const [todayBest, setTodayBest] = useState<number>(0);
   const [streak, setStreak] = useState<number>(0);
@@ -125,9 +138,11 @@ export default function BrickBreakerMiniApp() {
   const [soundOn, setSoundOn] = useState<boolean>(false);
   const [hapticsOn, setHapticsOn] = useState<boolean>(true);
 
-  // --- Leaderboard (local)
+  // --- Leaderboard (local + remote)
   const [lbOpen, setLbOpen] = useState(false);
   const [lb, setLb] = useState<LBEntry[]>([]);
+  const [remoteLb, setRemoteLb] = useState<RemoteLBEntry[]>([]);
+  const [remoteLbErr, setRemoteLbErr] = useState<string | null>(null);
 
   // --- UI toast
   const [toast, setToast] = useState<string | null>(null);
@@ -156,6 +171,9 @@ export default function BrickBreakerMiniApp() {
   // Timed effects
   const slowUntilRef = useRef<number>(0);
   const widenUntilRef = useRef<number>(0);
+
+  // Prevent duplicate commits per state/day
+  const lastCommitKeyRef = useRef<string>("");
 
   const ui = useMemo(() => ({ headerH: 44, wall: 10, brickGap: 6 }), []);
 
@@ -254,7 +272,7 @@ export default function BrickBreakerMiniApp() {
     return () => window.removeEventListener("resize", compute);
   }, []);
 
-  // ---------------- Remote leaderboard helpers (best-effort; no state) ----------------
+  // ---------------- Remote leaderboard helpers ----------------
   const randomNonce = useCallback(() => `${Date.now()}_${Math.random().toString(16).slice(2)}`, []);
 
   const signMessageCompat = useCallback(async (message: string): Promise<{ address: string; signature: string } | null> => {
@@ -272,18 +290,52 @@ export default function BrickBreakerMiniApp() {
 
     if (!signature) return null;
     return { address: from.toLowerCase(), signature };
-}, []);
+  }, []);
 
-const fetchRemoteLeaderboard = useCallback(async (dId: string): Promise<void> => {
-  const res = await fetch(`/api/leaderboard?dailyId=${encodeURIComponent(dId)}&limit=10`);
-  const json = await safeJson(res);
+  const fetchRemoteLeaderboard = useCallback(async (dId: string): Promise<void> => {
+    setRemoteLbErr(null);
 
-  if (!res.ok) {
-    const err = isRecord(json) ? String(json.error ?? "leaderboard fetch failed") : "leaderboard fetch failed";
-    throw new Error(err);
-  }
-}, []);
+    const res = await fetch(`/api/leaderboard?dailyId=${encodeURIComponent(dId)}&limit=10`, { method: "GET" });
+    const json = await safeJson(res);
 
+    if (!res.ok) {
+      const err = isRecord(json) ? String(json.error ?? "leaderboard fetch failed") : "leaderboard fetch failed";
+      setRemoteLbErr(err);
+      throw new Error(err);
+    }
+
+    const entriesRaw = isRecord(json) ? (json.entries ?? json.data ?? json.leaderboard) : json;
+    if (!Array.isArray(entriesRaw)) {
+      setRemoteLb([]);
+      return;
+    }
+
+    const mapped: RemoteLBEntry[] = entriesRaw
+      .map((e: unknown) => {
+        if (!isRecord(e)) return null;
+
+        const scoreN = Number(e.score);
+        const levelN = Number(e.level ?? e.lvl);
+        const address = typeof e.address === "string" ? e.address : "";
+        const name = typeof e.name === "string" ? e.name : shortAddr(address);
+
+        const t =
+          typeof e.t === "number"
+            ? e.t
+            : typeof e.createdAt === "number"
+              ? e.createdAt
+              : typeof e.createdAt === "string"
+                ? Date.parse(e.createdAt)
+                : Date.now();
+
+        if (!Number.isFinite(scoreN) || !Number.isFinite(levelN)) return null;
+        return { name, score: scoreN, level: levelN, t: Number.isFinite(t) ? t : Date.now() };
+      })
+      .filter((x): x is RemoteLBEntry => Boolean(x));
+
+    mapped.sort((a, b) => b.score - a.score || b.level - a.level || b.t - a.t);
+    setRemoteLb(mapped.slice(0, 10));
+  }, []);
 
   const submitRemoteScore = useCallback(
     async (finalScore: number, finalLevel: number) => {
@@ -349,7 +401,7 @@ const fetchRemoteLeaderboard = useCallback(async (dId: string): Promise<void> =>
     }
   }, [dailyId, keyLeaderboard]);
 
-  // leaderboard load (remote) - best effort, no state
+  // leaderboard load (remote)
   useEffect(() => {
     fetchRemoteLeaderboard(dailyId).catch(() => {});
   }, [dailyId, fetchRemoteLeaderboard]);
@@ -474,6 +526,7 @@ const fetchRemoteLeaderboard = useCallback(async (dId: string): Promise<void> =>
       resetRound();
       setGameState("idle");
       particlesRef.current = [];
+      lastCommitKeyRef.current = ""; // allow commits on new run
     },
     [makeLevelBricks, resetRound]
   );
@@ -575,14 +628,28 @@ const fetchRemoteLeaderboard = useCallback(async (dId: string): Promise<void> =>
     particlesRef.current = parts;
   }, [ui.headerH]);
 
+  const canCommitOnce = useCallback(
+    (state: "win" | "gameover") => {
+      const key = `${dailyId}:${state}`;
+      if (lastCommitKeyRef.current === key) return false;
+      lastCommitKeyRef.current = key;
+      return true;
+    },
+    [dailyId]
+  );
+
   const commitLeaderboardIfNeeded = useCallback(
     (finalState: "win" | "gameover") => {
       if (practiceMode) return;
+      if (!canCommitOnce(finalState)) return;
+
+      const finalScore = scoreRef.current;
+      const finalLevel = levelRef.current;
 
       const entry: LBEntry = {
         name: shortAddr(userAddr || userKeyRef.current),
-        score,
-        level,
+        score: finalScore,
+        level: finalLevel,
         t: Date.now(),
       };
 
@@ -590,13 +657,13 @@ const fetchRemoteLeaderboard = useCallback(async (dId: string): Promise<void> =>
       saveLeaderboard(entry);
 
       // remote (best-effort)
-      submitRemoteScore(score, level)
+      submitRemoteScore(finalScore, finalLevel)
         .then(() => fetchRemoteLeaderboard(dailyId).catch(() => {}))
         .catch(() => {});
 
       showToast(finalState === "win" ? "Saved to leaderboard 🏆" : "Score saved 🏆", 1200);
     },
-    [dailyId, fetchRemoteLeaderboard, level, practiceMode, saveLeaderboard, score, showToast, submitRemoteScore, userAddr]
+    [canCommitOnce, dailyId, fetchRemoteLeaderboard, practiceMode, saveLeaderboard, showToast, submitRemoteScore, userAddr]
   );
 
   const loseLifeOrBall = useCallback(
@@ -625,7 +692,7 @@ const fetchRemoteLeaderboard = useCallback(async (dId: string): Promise<void> =>
         const next = prev - 1;
         const over = next <= 0;
         setGameState(over ? "gameover" : "idle");
-        if (over) maybeUpdateDailyBest(score);
+        if (over) maybeUpdateDailyBest(scoreRef.current);
         return next;
       });
 
@@ -633,7 +700,7 @@ const fetchRemoteLeaderboard = useCallback(async (dId: string): Promise<void> =>
       beep(180, 80, 0.05);
       haptic(40);
     },
-    [beep, haptic, maybeUpdateDailyBest, practiceInfiniteLives, practiceMode, resetBallsToPaddle, score]
+    [beep, haptic, maybeUpdateDailyBest, practiceInfiniteLives, practiceMode, resetBallsToPaddle]
   );
 
   const spawnDropMaybe = useCallback(
@@ -1003,7 +1070,8 @@ const fetchRemoteLeaderboard = useCallback(async (dId: string): Promise<void> =>
       }
 
       if (!bricksRef.current.some((br) => br.alive)) {
-        maybeUpdateDailyBest(score);
+        const finalScore = scoreRef.current;
+        maybeUpdateDailyBest(finalScore);
         setGameState("win");
 
         resetBallsToPaddle();
@@ -1165,9 +1233,13 @@ const fetchRemoteLeaderboard = useCallback(async (dId: string): Promise<void> =>
           ? "Share (0 attempts)"
           : "Share";
 
+  const boardToShow = remoteLb.length ? remoteLb : lb;
+  const boardLabel = remoteLb.length ? "Remote" : "Local";
+
   return (
     <div ref={containerRef} className="min-h-[100dvh] bg-black text-white w-full max-w-[520px] mx-auto px-3 py-4">
-      <div className="mb-3 flex items-center gap-2">
+      <div className="mb-3 flex items-center gap-2 relative z-20">
+
         <Link
           href="/"
           className="h-10 px-3 rounded-2xl bg-white/10 text-white font-semibold border border-white/15 inline-flex items-center active:scale-[0.99]"
@@ -1201,6 +1273,7 @@ const fetchRemoteLeaderboard = useCallback(async (dId: string): Promise<void> =>
                 resetRound();
                 setGameState("idle");
                 particlesRef.current = [];
+                lastCommitKeyRef.current = "";
                 return next;
               });
             })}
@@ -1239,7 +1312,14 @@ const fetchRemoteLeaderboard = useCallback(async (dId: string): Promise<void> =>
               });
             })}
 
-            {renderPillButton("🏆 Leaderboard", () => setLbOpen(true))}
+            <button
+  type="button"
+  onClick={() => setLbOpen(true)}
+  className="px-3 py-1 rounded-xl bg-white/15 border border-white/20 text-[11px] text-white/90 font-semibold cursor-pointer pointer-events-auto active:scale-[0.99]"
+>
+  🏆 Leaderboard
+</button>
+
           </div>
         </div>
 
@@ -1249,9 +1329,10 @@ const fetchRemoteLeaderboard = useCallback(async (dId: string): Promise<void> =>
         </div>
       </div>
 
-      <div className="rounded-3xl overflow-hidden border border-white/10 bg-white/5 shadow-[0_0_0_1px_rgba(255,255,255,0.05)]">
-        <canvas ref={canvasRef} className="block touch-none select-none" />
-      </div>
+      <div className="rounded-3xl overflow-hidden border border-white/10 bg-white/5 shadow-[0_0_0_1px_rgba(255,255,255,0.05)] relative z-0">
+  <canvas ref={canvasRef} className="block touch-none select-none" />
+</div>
+
 
       <div className="mt-3 flex items-center gap-2">
         <button
@@ -1310,6 +1391,14 @@ const fetchRemoteLeaderboard = useCallback(async (dId: string): Promise<void> =>
             <div className="p-4 flex items-center gap-2 border-b border-white/10">
               <div className="font-extrabold">🏆 Daily Leaderboard</div>
               <div className="ml-auto text-xs text-white/60">{dailyId}</div>
+
+              <button
+                onClick={() => fetchRemoteLeaderboard(dailyId).catch(() => {})}
+                className="ml-2 h-9 px-3 rounded-2xl bg-white/10 border border-white/15 text-white/80 font-semibold active:scale-[0.99]"
+              >
+                Refresh
+              </button>
+
               <button
                 onClick={() => setLbOpen(false)}
                 className="ml-2 h-9 px-3 rounded-2xl bg-white/10 border border-white/15 text-white/80 font-semibold active:scale-[0.99]"
@@ -1319,11 +1408,17 @@ const fetchRemoteLeaderboard = useCallback(async (dId: string): Promise<void> =>
             </div>
 
             <div className="p-4">
-              {lb.length === 0 ? (
+              {remoteLbErr && (
+                <div className="mb-3 text-[12px] text-red-300 bg-white/5 border border-white/10 rounded-2xl px-3 py-2">
+                  Remote error: {remoteLbErr}
+                </div>
+              )}
+
+              {boardToShow.length === 0 ? (
                 <div className="text-sm text-white/70">No scores yet. Finish a daily run to appear here.</div>
               ) : (
                 <div className="space-y-2">
-                  {lb.map((e, idx) => (
+                  {boardToShow.map((e, idx) => (
                     <div
                       key={`${e.t}-${idx}`}
                       className="flex items-center gap-3 px-3 py-2 rounded-2xl bg-white/5 border border-white/10"
@@ -1340,7 +1435,7 @@ const fetchRemoteLeaderboard = useCallback(async (dId: string): Promise<void> =>
               )}
 
               <div className="mt-4 text-[11px] text-white/50">
-                * Leaderboard is local (device-only) mock. Practice mode doesn’t save here.
+                * Showing: {boardLabel}. Practice mode doesn’t submit remotely.
               </div>
             </div>
           </div>
@@ -1349,7 +1444,9 @@ const fetchRemoteLeaderboard = useCallback(async (dId: string): Promise<void> =>
 
       {toast && (
         <div className="fixed left-0 right-0 bottom-5 flex justify-center pointer-events-none z-50">
-          <div className="px-3 py-2 rounded-2xl bg-black/80 border border-white/10 text-white text-sm shadow">{toast}</div>
+          <div className="px-3 py-2 rounded-2xl bg-black/80 border border-white/10 text-white text-sm shadow">
+            {toast}
+          </div>
         </div>
       )}
     </div>
