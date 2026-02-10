@@ -126,7 +126,8 @@ export default function BrickBreakerMiniApp() {
   const [streak, setStreak] = useState<number>(0);
 
   // --- Attempts (UNLIMITED)
-  const DAILY_ATTEMPTS = Infinity;
+  const _DAILY_ATTEMPTS = Infinity;
+
   const [attemptsLeft, setAttemptsLeft] = useState<number>(Infinity);
   const attemptsLeftRef = useRef<number>(Infinity);
 
@@ -772,10 +773,13 @@ export default function BrickBreakerMiniApp() {
 
   // pointer controls
   useEffect(() => {
-  let canvasEl = canvasRef.current;
-  if (!canvasEl) return;
+  const canvasEl = canvasRef.current;
+if (!canvasEl) return;
 
-  const canvas = canvasEl; // local non-null snapshot
+const canvas = canvasEl;
+
+  
+  // local non-null snapshot
 
   function toGameX(clientX: number) {
     const rect = canvas.getBoundingClientRect();
