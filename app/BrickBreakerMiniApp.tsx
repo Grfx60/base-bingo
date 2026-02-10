@@ -1,8 +1,6 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import Link from "next/link";
-import { useMiniKit } from "@coinbase/onchainkit/minikit";
 
 type GameState = "idle" | "running" | "paused" | "gameover" | "win";
 type Brick = { x: number; y: number; w: number; h: number; alive: boolean; hp: number };
@@ -91,19 +89,50 @@ function circleRectCollide(cx: number, cy: number, r: number, rx: number, ry: nu
   return dx * dx + dy * dy <= r * r;
 }
 
-type MiniKitLike = {
-  ready?: () => void;
-  actions?: {
-    ready?: () => void;
-    share?: (data: { text: string }) => Promise<void> | void;
-  };
-  user?: { address?: string };
-  context?: { user?: { address?: string } };
-};
+function formatDailyIdToPretty(dailyId: string) {
+  // dailyId: YYYY-MM-DD
+  const [y, m, d] = dailyId.split("-").map(Number);
+  const dt = new Date(y, (m || 1) - 1, d || 1);
+  try {
+    return new Intl.DateTimeFormat("en-GB", { day: "2-digit", month: "short", year: "numeric" }).format(dt);
+  } catch {
+    return dailyId;
+  }
+}
+
+function IconButton({
+  label,
+  onClick,
+  disabled,
+  children,
+}: {
+  label: string;
+  onClick: () => void;
+  disabled?: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      onClick={onClick}
+      disabled={disabled}
+      className={[
+        "pointer-events-auto select-none",
+        "h-12 w-12 rounded-2xl",
+        "bg-white/10 border border-white/15",
+        "backdrop-blur-md",
+        "active:scale-[0.98]",
+        "disabled:opacity-40 disabled:active:scale-100",
+        "flex items-center justify-center",
+      ].join(" ")}
+    >
+      {children}
+    </button>
+  );
+}
 
 export default function BrickBreakerMiniApp() {
-  const miniKit = useMiniKit();
-
   // --- Daily id
   const [dailyId] = useState(() => dateKey(new Date()));
   const dailyIdRef = useRef(dailyId);
@@ -135,11 +164,8 @@ export default function BrickBreakerMiniApp() {
   const [todayBest, setTodayBest] = useState<number>(0);
   const [streak, setStreak] = useState<number>(0);
 
-  // --- Attempts (UNLIMITED)
-  const _DAILY_ATTEMPTS = Infinity;
-
-  const [attemptsLeft, setAttemptsLeft] = useState<number>(Infinity);
-  const attemptsLeftRef = useRef<number>(Infinity);
+  // --- Attempts (UNLIMITED UI)
+  const attemptsLeft = Infinity;
 
   // --- Preferences
   const [soundOn, setSoundOn] = useState<boolean>(false);
@@ -235,25 +261,17 @@ export default function BrickBreakerMiniApp() {
 
   // Sync refs
   useEffect(() => void (gameStateRef.current = gameState), [gameState]);
-  useEffect(() => void (attemptsLeftRef.current = attemptsLeft), [attemptsLeft]);
 
-  // MiniKit lifecycle
+  // Resolve user (MiniKit-ish, no dependency)
   useEffect(() => {
-    const mk = miniKit as unknown as MiniKitLike;
-    mk.ready?.();
-    mk.actions?.ready?.();
-  }, [miniKit]);
-
-  // Resolve user
-  useEffect(() => {
-    const mk = miniKit as unknown as MiniKitLike;
-    const addr = mk.user?.address ?? mk.context?.user?.address;
+    const mk = (globalThis as unknown as { miniKit?: { user?: { address?: string }; context?: { user?: { address?: string } } } }).miniKit;
+    const addr = mk?.user?.address ?? mk?.context?.user?.address;
     const normalized = (addr || "").toLowerCase().trim();
     setUserAddr(normalized);
     const key = normalized ? `addr_${normalized}` : "anon";
     setUserKey(key);
     userKeyRef.current = key;
-  }, [miniKit]);
+  }, []);
 
   // storage keys
   const keyDailyBest = useCallback(() => `bb_${userKeyRef.current}_daily_best_${dailyIdRef.current}`, []);
@@ -261,7 +279,6 @@ export default function BrickBreakerMiniApp() {
   const keyStreakCount = useCallback(() => `bb_${userKeyRef.current}_streak_count`, []);
   const keyPrefs = useCallback(() => `bb_${userKeyRef.current}_prefs`, []);
   const keyLeaderboard = useCallback(() => `bb_lb_${dailyIdRef.current}`, []);
-  const keySeenHint = useCallback(() => `bb_${userKeyRef.current}_seen_hint_${dailyIdRef.current}`, []);
 
   // scale
   useEffect(() => {
@@ -304,10 +321,10 @@ export default function BrickBreakerMiniApp() {
     if (!res.ok) {
       const err = isRecord(json) ? String(json.error ?? "leaderboard fetch failed") : "leaderboard fetch failed";
       setRemoteLbErr(err);
-      setRemoteLb([]);
-      return;
+      throw new Error(err);
     }
 
+    // API: { ok: true, items: [...] }
     const entriesRaw = isRecord(json) ? (json.items ?? json.entries ?? json.data ?? json.leaderboard) : json;
     if (!Array.isArray(entriesRaw)) {
       setRemoteLb([]);
@@ -321,6 +338,7 @@ export default function BrickBreakerMiniApp() {
         const scoreN = Number(e.score);
         const levelN = Number(e.level ?? e.lvl);
         const address = typeof e.address === "string" ? e.address.toLowerCase() : "";
+
         const name = typeof e.name === "string" ? e.name : shortAddr(address);
 
         const t =
@@ -333,6 +351,7 @@ export default function BrickBreakerMiniApp() {
                 : Date.now();
 
         if (!Number.isFinite(scoreN) || !Number.isFinite(levelN)) return null;
+
         return { name, score: scoreN, level: levelN, t: Number.isFinite(t) ? t : Date.now(), address };
       })
       .filter((x): x is RemoteLBEntry => x !== null);
@@ -455,23 +474,6 @@ export default function BrickBreakerMiniApp() {
     setStreak(nextCount);
   }, [dailyId, userKey, keyStreakLast, keyStreakCount]);
 
-  // Attempts (unlimited)
-  useEffect(() => {
-    setAttemptsLeft(Infinity);
-    attemptsLeftRef.current = Infinity;
-  }, [dailyId, userKey]);
-
-  // Submission polish: first-time hint (once per day per user)
-  useEffect(() => {
-    try {
-      const seen = localStorage.getItem(keySeenHint());
-      if (!seen) {
-        localStorage.setItem(keySeenHint(), "1");
-        showToast("👆 Tap canvas to launch • Drag to move", 1700);
-      }
-    } catch {}
-  }, [keySeenHint, showToast]);
-
   const makeLevelBricks = useCallback(
     (lvl: number) => {
       const seed = hashStringToSeed(`${dailyIdRef.current}-${userKeyRef.current}-lvl-${lvl}`);
@@ -556,12 +558,6 @@ export default function BrickBreakerMiniApp() {
     [practiceMode, todayBest, keyDailyBest]
   );
 
-  const spendAttemptIfNeeded = useCallback((): boolean => {
-    // Unlimited daily attempts:
-    if (practiceMode) return true;
-    return true;
-  }, [practiceMode]);
-
   const baseBallSpeed = useCallback(() => {
     const now = performance.now();
     const slow = now < slowUntilRef.current;
@@ -569,8 +565,6 @@ export default function BrickBreakerMiniApp() {
   }, []);
 
   const launchBalls = useCallback(() => {
-    if (!spendAttemptIfNeeded()) return;
-
     ensureAudio();
 
     const balls = ballsRef.current;
@@ -592,7 +586,7 @@ export default function BrickBreakerMiniApp() {
     setGameState("running");
     haptic(15);
     beep(420, 50, 0.03);
-  }, [baseBallSpeed, beep, ensureAudio, haptic, spendAttemptIfNeeded]);
+  }, [baseBallSpeed, beep, ensureAudio, haptic]);
 
   const nextLevelFn = useCallback(() => {
     setLevel((prev) => {
@@ -747,13 +741,11 @@ export default function BrickBreakerMiniApp() {
     [baseBallSpeed, beep, haptic, showToast]
   );
 
-  // ---------- FIX #1: Share works in Base App ----------
-  const shareScore = useCallback(async () => {
+  async function shareScore() {
     const origin = typeof window !== "undefined" ? window.location.origin : "";
     const url = `${origin}/brick-breaker`;
 
     const modeLine = practiceMode ? `🧪 Practice Mode` : `🎯 Daily Mode`;
-    const attemptsLine = `Attempts: ∞`;
     const statusLine =
       gameState === "win"
         ? `✅ Cleared Level ${level}!`
@@ -764,64 +756,36 @@ export default function BrickBreakerMiniApp() {
             : `🎮 In progress`;
 
     const text =
-      `🧱 Brick Breaker — Daily Challenge (${dailyId})\n` +
+      `🧱 Brick Breaker (${dailyId})\n` +
       `${modeLine}\n` +
       `${statusLine}\n` +
       `Score: ${score} • Best: ${todayBest} • Streak: ${streak}🔥 • Level: ${level}\n` +
-      `${attemptsLine}\n` +
+      `Attempts: ∞\n` +
       `Play: ${url}\n` +
-      `#Base #BaseApp #Onchain #MiniApp`;
+      `#Base #Onchain #MiniApp`;
 
-    // 1) Web Share API (some environments)
     try {
       if (typeof navigator !== "undefined" && "share" in navigator) {
-        const shareFn = (navigator as Navigator & { share?: (data: { text?: string }) => Promise<void> }).share;
+        const shareFn = (navigator as Navigator & { share?: (data: { text?: string; url?: string }) => Promise<void> }).share;
         if (shareFn) {
-          await shareFn({ text });
+          await shareFn({ text, url });
           showToast("Shared ✅", 1200);
           return;
         }
       }
-    } catch {}
+    } catch {
+      // fallthrough to clipboard
+    }
 
-    // 2) MiniKit share (Base App friendly)
-    try {
-      const mk = miniKit as unknown as MiniKitLike;
-      const share = mk.actions?.share;
-      if (share) {
-        await Promise.resolve(share({ text }));
-        showToast("Shared ✅", 1200);
-        return;
-      }
-    } catch {}
-
-    // 3) Clipboard fallback
     try {
       await navigator.clipboard.writeText(text);
       showToast("Copied ✅", 1200);
     } catch {
       showToast("Copy failed ❌", 1400);
     }
-  }, [dailyId, gameState, level, miniKit, practiceMode, score, showToast, streak, todayBest]);
+  }
 
-  // ---------- FIX #2: Leaderboard always opens (touch + click) ----------
-  const openLeaderboard = useCallback(() => {
-    setLbOpen(true);
-    haptic(10);
-    void fetchRemoteLeaderboard(dailyId);
-  }, [dailyId, fetchRemoteLeaderboard, haptic]);
-
-  // lock body scroll when modal open (mobile UX polish)
-  useEffect(() => {
-    if (!lbOpen) return;
-    const prev = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    return () => {
-      document.body.style.overflow = prev;
-    };
-  }, [lbOpen]);
-
-  // pointer controls
+  // pointer controls (canvas)
   useEffect(() => {
     const canvasEl = canvasRef.current;
     if (!canvasEl) return;
@@ -951,11 +915,13 @@ export default function BrickBreakerMiniApp() {
     }
 
     function drawBrick(br: Brick, shimmer: number) {
-      const base = br.hp >= 2 ? "rgba(120, 200, 255, 0.95)" : "rgba(80, 170, 255, 0.88)";
+      const base = br.hp >= 2 ? "rgba(120, 200, 255, 0.95)" : "rgba(80, 170, 255, 0.90)";
       c.fillStyle = base;
+
+      // slightly rounded-ish feel (fake by drawing inset)
       c.fillRect(br.x, br.y, br.w, br.h);
 
-      c.fillStyle = "rgba(255,255,255,0.14)";
+      c.fillStyle = "rgba(255,255,255,0.16)";
       c.fillRect(br.x, br.y, br.w, 3);
 
       if (br.hp >= 2) {
@@ -964,7 +930,7 @@ export default function BrickBreakerMiniApp() {
         c.fillRect(sweepX, br.y, 14, br.h);
       }
 
-      c.strokeStyle = "rgba(255,255,255,0.08)";
+      c.strokeStyle = "rgba(255,255,255,0.09)";
       c.strokeRect(br.x + 0.5, br.y + 0.5, br.w - 1, br.h - 1);
     }
 
@@ -978,6 +944,7 @@ export default function BrickBreakerMiniApp() {
             ? "rgba(255, 209, 102, 0.90)"
             : "rgba(80,255,160,0.90)";
       c.fill();
+
       c.fillStyle = "rgba(0,0,0,0.55)";
       c.font = "700 10px system-ui";
       const t = d.type === "widen" ? "W" : d.type === "slow" ? "S" : "M";
@@ -1098,14 +1065,13 @@ export default function BrickBreakerMiniApp() {
     function draw() {
       c.clearRect(0, 0, GAME_W, GAME_H);
 
+      // background
       c.fillStyle = "#0b0f1a";
-      c.fillRect(0, 0, GAME_W, ui.headerH);
+      c.fillRect(0, 0, GAME_W, GAME_H);
 
-      c.fillStyle = "#e8eefc";
-      c.font = "600 14px system-ui, -apple-system, Segoe UI, Roboto";
-      c.fillText(`Score: ${score}`, 12, 28);
-      c.fillText(`Lives: ${practiceMode && practiceInfiniteLives ? "∞" : lives}`, 140, 28);
-      c.fillText(`Lv: ${level}`, 280, 28);
+      // top safe HUD strip (thin)
+      c.fillStyle = "rgba(255,255,255,0.04)";
+      c.fillRect(0, 0, GAME_W, ui.headerH);
 
       const shimmer = shimmerTRef.current;
 
@@ -1127,10 +1093,21 @@ export default function BrickBreakerMiniApp() {
       }
 
       const p = paddleRef.current;
+
+      // paddle glow
+      c.fillStyle = "rgba(120, 200, 255, 0.18)";
+      c.fillRect(p.x - p.w / 2 - 6, p.y - 6, p.w + 12, p.h + 12);
+
       c.fillStyle = "rgba(255, 255, 255, 0.92)";
       c.fillRect(p.x - p.w / 2, p.y, p.w, p.h);
 
       for (const b of ballsRef.current) {
+        // ball halo
+        c.beginPath();
+        c.arc(b.x, b.y, b.r + 5, 0, Math.PI * 2);
+        c.fillStyle = "rgba(255, 209, 102, 0.12)";
+        c.fill();
+
         c.beginPath();
         c.arc(b.x, b.y, b.r, 0, Math.PI * 2);
         c.fillStyle = "#ffd166";
@@ -1221,21 +1198,8 @@ export default function BrickBreakerMiniApp() {
     ui.wall,
   ]);
 
-  const renderPillButton = (label: string, onClick: () => void) => (
-    <button
-      onClick={onClick}
-      onPointerUp={(e) => {
-        e.preventDefault();
-        onClick();
-      }}
-      className="px-2 py-0.5 rounded-xl bg-white/10 border border-white/15 text-[11px] text-white/80 active:scale-[0.99]"
-      type="button"
-    >
-      {label}
-    </button>
-  );
-
-  const shareLabel = gameState === "win" ? "Share Win" : gameState === "gameover" ? "Share Score" : "Share";
+  // ---------- UI ----------
+  const prettyDate = useMemo(() => formatDailyIdToPretty(dailyId), [dailyId]);
 
   const boardToShow = remoteLb.length ? remoteLb : lb;
   const boardLabel = remoteLb.length ? "Remote" : "Local";
@@ -1243,167 +1207,241 @@ export default function BrickBreakerMiniApp() {
   const myAddr = (userAddr || "").toLowerCase().trim();
   const myName = shortAddr(myAddr || userKeyRef.current);
 
+  const topLine = (
+    <div className="flex items-center gap-3 text-[12px] text-white/80 font-semibold">
+      <div className="flex items-center gap-2">
+        <span className="text-white/70">📅</span>
+        <span>{prettyDate}</span>
+      </div>
+      <div className="flex items-center gap-2">
+        <span>🔥</span>
+        <span>Streak: {streak}</span>
+      </div>
+      <div className="flex items-center gap-2">
+        <span>🏆</span>
+        <span>Best: {todayBest}</span>
+      </div>
+    </div>
+  );
+
+  const secondLine = (
+    <div className="mt-2 flex items-center gap-6 text-[16px] font-extrabold tracking-tight">
+      <div className="flex items-center gap-2">
+        <span className="text-white/70 text-sm font-semibold">Score:</span>
+        <span className="tabular-nums">{score}</span>
+      </div>
+
+      <div className="flex items-center gap-2">
+        <span className="text-white/70 text-sm font-semibold">❤️</span>
+        <span className="tabular-nums">{practiceMode && practiceInfiniteLives ? "∞" : lives}</span>
+      </div>
+
+      <div className="flex items-center gap-2">
+        <span className="text-white/70 text-sm font-semibold">△</span>
+        <span className="tabular-nums">{level}</span>
+      </div>
+    </div>
+  );
+
   return (
-    <div ref={containerRef} className="min-h-[100dvh] bg-black text-white w-full max-w-[520px] mx-auto px-3 py-4">
-      {/* HEADER: clickable above canvas */}
-      <div className="mb-3 flex items-center gap-2 relative z-30">
-        <Link
-          href="/"
-          className="h-10 px-3 rounded-2xl bg-white/10 text-white font-semibold border border-white/15 inline-flex items-center active:scale-[0.99]"
-        >
-          ←
-        </Link>
-
-        <div className="flex-1">
-          <div className="text-sm font-semibold leading-tight">Brick Breaker</div>
-
-          <div className="mt-1 inline-flex items-center gap-2 text-[11px] text-white/70 flex-wrap">
-            <span className="px-2 py-0.5 rounded-xl bg-white/10 border border-white/15">Daily {dailyId}</span>
-            <span className="px-2 py-0.5 rounded-xl bg-white/10 border border-white/15">Best {todayBest}</span>
-            <span className="px-2 py-0.5 rounded-xl bg-white/10 border border-white/15">🔥 Streak {streak}</span>
-            <span className="px-2 py-0.5 rounded-xl bg-white/10 border border-white/15">🎟 Attempts ∞</span>
-
-            {renderPillButton(practiceMode ? "🧪 Practice" : "🎯 Daily", () => {
-              setPracticeMode((v) => {
-                const next = !v;
-                showToast(next ? "Practice mode 🧪 (no daily impact)" : "Daily mode 🎯", 1200);
-                haptic(20);
-                beep(next ? 500 : 700, 40, 0.02);
-
-                setPracticeInfiniteLives(false);
-                setScore(0);
-                setLives(3);
-                setLevel(1);
-                makeLevelBricks(1);
-                resetRound();
-                setGameState("idle");
-                particlesRef.current = [];
-                lastCommitKeyRef.current = "";
-                return next;
-              });
-            })}
-
-            {practiceMode &&
-              renderPillButton(practiceInfiniteLives ? "❤️∞ Lives" : "❤️ Lives", () => {
-                setPracticeInfiniteLives((v) => {
-                  const next = !v;
-                  showToast(next ? "Infinite lives enabled ❤️∞" : "Infinite lives off ❤️", 1100);
-                  haptic(15);
-                  beep(next ? 860 : 420, 35, 0.02);
-                  return next;
-                });
-              })}
-
-            {renderPillButton(soundOn ? "🔊 Sound ON" : "🔇 Sound OFF", () => {
-              setSoundOn((v) => {
-                const next = !v;
-                if (next) {
-                  ensureAudio();
-                  showToast("Sound enabled 🔊", 1000);
-                  beep(600, 50, 0.02);
-                } else {
-                  showToast("Sound muted 🔇", 1000);
-                }
-                return next;
-              });
-            })}
-
-            {renderPillButton(hapticsOn ? "📳 Haptics ON" : "📴 Haptics OFF", () => {
-              setHapticsOn((v) => {
-                const next = !v;
-                showToast(next ? "Haptics enabled 📳" : "Haptics off 📴", 1000);
-                if (next) haptic(20);
-                return next;
-              });
-            })}
+    <div ref={containerRef} className="min-h-[100dvh] bg-black text-white w-full max-w-[520px] mx-auto">
+      {/* TOP HUD (modern) */}
+      <div className="px-4 pt-4">
+        <div className="rounded-3xl border border-white/10 bg-white/[0.06] backdrop-blur-xl shadow-[0_0_0_1px_rgba(255,255,255,0.03)] px-4 py-3">
+          <div className="flex items-start gap-3">
+            <div className="flex-1">
+              {topLine}
+              {secondLine}
+            </div>
 
             <button
               type="button"
-              onClick={openLeaderboard}
-              onPointerUp={(e) => {
-                e.preventDefault();
-                openLeaderboard();
-              }}
-              className="px-3 py-1 rounded-xl bg-white/15 border border-white/20 text-[11px] text-white/90 font-semibold cursor-pointer pointer-events-auto active:scale-[0.99] relative z-40"
+              onClick={() => setLbOpen(true)}
+              className="pointer-events-auto h-10 w-10 rounded-2xl bg-white/10 border border-white/15 active:scale-[0.98] flex items-center justify-center"
+              aria-label="Open leaderboard"
             >
-              🏆 Leaderboard
+              🏆
             </button>
           </div>
         </div>
+      </div>
 
-        <div className="h-10 px-3 rounded-2xl bg-white/10 border border-white/15 flex items-center">
-          <span className="text-[11px] text-white/60 mr-2">Score</span>
-          <span className="text-sm font-extrabold tabular-nums">{score}</span>
+      {/* GAME AREA */}
+      <div className="px-4 pt-3 pb-24">
+        <div className="rounded-[28px] overflow-hidden border border-white/10 bg-white/[0.04] shadow-[0_0_0_1px_rgba(255,255,255,0.03)]">
+          <canvas ref={canvasRef} className="block touch-none select-none" />
         </div>
       </div>
 
-      {/* CANVAS */}
-      <div className="rounded-3xl overflow-hidden border border-white/10 bg-white/5 shadow-[0_0_0_1px_rgba(255,255,255,0.05)] relative z-0">
-        <canvas ref={canvasRef} className="block touch-none select-none" />
-      </div>
+      {/* FLOATING SETTINGS (top-right, like your reference) */}
+      <div className="pointer-events-none fixed top-24 right-4 z-30">
+        <div className="pointer-events-auto w-[190px] rounded-3xl border border-white/10 bg-white/[0.06] backdrop-blur-xl shadow-xl overflow-hidden">
+          <div className="px-4 py-3 text-[12px] text-white/90 font-semibold border-b border-white/10">Settings</div>
 
-      <div className="mt-3 flex items-center gap-2 relative z-10">
-        <button
-          onClick={() => {
-            if (gameState === "idle") return launchBalls();
-            if (gameState === "running") return setGameState("paused");
-            if (gameState === "paused") return setGameState("running");
-            if (gameState === "gameover") return resetGame(1);
-            if (gameState === "win") return nextLevelFn();
-          }}
-          onPointerUp={(e) => e.preventDefault()}
-          className="h-11 px-4 rounded-2xl font-extrabold active:scale-[0.99] bg-white text-black"
-          type="button"
-        >
-          {gameState === "idle" && "Start"}
-          {gameState === "running" && "Pause"}
-          {gameState === "paused" && "Resume"}
-          {gameState === "gameover" && "Restart"}
-          {gameState === "win" && "Next Level"}
-        </button>
+          <div className="p-3 space-y-2 text-[13px]">
+            <button
+              type="button"
+              onClick={() => {
+                setSoundOn((v) => {
+                  const next = !v;
+                  if (next) {
+                    ensureAudio();
+                    beep(600, 40, 0.02);
+                  }
+                  showToast(next ? "Sound ON 🔊" : "Sound OFF 🔇", 900);
+                  return next;
+                });
+              }}
+              className="w-full flex items-center justify-between px-3 py-2 rounded-2xl bg-white/5 border border-white/10 active:scale-[0.99]"
+            >
+              <span className="flex items-center gap-2">
+                <span>{soundOn ? "🔊" : "🔇"}</span>
+                <span className="text-white/80">Sound</span>
+              </span>
+              <span className="font-extrabold text-white/90">{soundOn ? "ON" : "OFF"}</span>
+            </button>
 
-        <button
-          onClick={() => resetGame(1)}
-          onPointerUp={(e) => e.preventDefault()}
-          className="h-11 px-4 rounded-2xl bg-white/10 text-white font-semibold border border-white/15 active:scale-[0.99]"
-          type="button"
-        >
-          Reset
-        </button>
+            <button
+              type="button"
+              onClick={() => {
+                setHapticsOn((v) => {
+                  const next = !v;
+                  if (next) haptic(20);
+                  showToast(next ? "Haptics ON 📳" : "Haptics OFF 📴", 900);
+                  return next;
+                });
+              }}
+              className="w-full flex items-center justify-between px-3 py-2 rounded-2xl bg-white/5 border border-white/10 active:scale-[0.99]"
+            >
+              <span className="flex items-center gap-2">
+                <span>{hapticsOn ? "📳" : "📴"}</span>
+                <span className="text-white/80">Haptics</span>
+              </span>
+              <span className="font-extrabold text-white/90">{hapticsOn ? "ON" : "OFF"}</span>
+            </button>
 
-        <button
-          onClick={() => void shareScore()}
-          onPointerUp={(e) => e.preventDefault()}
-          className="h-11 px-4 rounded-2xl bg-white/10 text-white font-semibold border border-white/15 active:scale-[0.99]"
-          type="button"
-        >
-          {shareLabel}
-        </button>
+            <div className="w-full flex items-center justify-between px-3 py-2 rounded-2xl bg-white/5 border border-white/10">
+              <span className="flex items-center gap-2">
+                <span>∞</span>
+                <span className="text-white/80">Attempts</span>
+              </span>
+              <span className="font-extrabold text-white/90">{attemptsLeft === Infinity ? "∞" : String(attemptsLeft)}</span>
+            </div>
 
-        <div className="ml-auto text-xs text-white/70">
-          {practiceMode ? "Practice • Drag to move • Tap to launch" : "Drag to move • Tap to launch"}
+            <button
+              type="button"
+              onClick={() => {
+                setPracticeMode((v) => {
+                  const next = !v;
+                  showToast(next ? "Practice mode 🧪" : "Daily mode 🎯", 1000);
+                  haptic(20);
+                  beep(next ? 500 : 700, 40, 0.02);
+
+                  setPracticeInfiniteLives(false);
+                  setScore(0);
+                  setLives(3);
+                  setLevel(1);
+                  makeLevelBricks(1);
+                  resetRound();
+                  setGameState("idle");
+                  particlesRef.current = [];
+                  lastCommitKeyRef.current = "";
+                  return next;
+                });
+              }}
+              className="w-full flex items-center justify-between px-3 py-2 rounded-2xl bg-white/5 border border-white/10 active:scale-[0.99]"
+            >
+              <span className="flex items-center gap-2">
+                <span>{practiceMode ? "🧪" : "🎯"}</span>
+                <span className="text-white/80">Mode</span>
+              </span>
+              <span className="font-extrabold text-white/90">{practiceMode ? "Practice" : "Daily"}</span>
+            </button>
+
+            {practiceMode && (
+              <button
+                type="button"
+                onClick={() => {
+                  setPracticeInfiniteLives((v) => {
+                    const next = !v;
+                    showToast(next ? "Infinite lives ❤️∞" : "Lives normal ❤️", 1000);
+                    haptic(15);
+                    beep(next ? 860 : 420, 35, 0.02);
+                    return next;
+                  });
+                }}
+                className="w-full flex items-center justify-between px-3 py-2 rounded-2xl bg-white/5 border border-white/10 active:scale-[0.99]"
+              >
+                <span className="flex items-center gap-2">
+                  <span>❤️</span>
+                  <span className="text-white/80">Lives</span>
+                </span>
+                <span className="font-extrabold text-white/90">{practiceInfiniteLives ? "∞" : "3"}</span>
+              </button>
+            )}
+          </div>
         </div>
       </div>
 
+      {/* BOTTOM CONTROL BAR (icons like your reference) */}
+      <div className="pointer-events-none fixed bottom-4 left-0 right-0 z-40 flex justify-center">
+        <div className="pointer-events-auto w-[320px] rounded-3xl border border-white/10 bg-white/[0.06] backdrop-blur-xl shadow-xl px-5 py-3 flex items-center justify-between">
+          <IconButton
+            label={gameState === "running" ? "Pause" : gameState === "paused" ? "Resume" : gameState === "idle" ? "Start" : "Continue"}
+            onClick={() => {
+              if (gameState === "idle") return launchBalls();
+              if (gameState === "running") return setGameState("paused");
+              if (gameState === "paused") return setGameState("running");
+              if (gameState === "gameover") return resetGame(1);
+              if (gameState === "win") return nextLevelFn();
+            }}
+          >
+            <span className="text-xl">
+              {gameState === "running" ? "⏸" : gameState === "paused" ? "▶️" : gameState === "idle" ? "▶️" : gameState === "win" ? "⏭️" : "↻"}
+            </span>
+          </IconButton>
+
+          <IconButton
+            label="Reset"
+            onClick={() => {
+              resetGame(1);
+              showToast("Reset 🔄", 900);
+            }}
+          >
+            <span className="text-xl">🔄</span>
+          </IconButton>
+
+          <IconButton
+            label="Share"
+            onClick={() => {
+              void shareScore();
+            }}
+          >
+            <span className="text-xl">📤</span>
+          </IconButton>
+        </div>
+      </div>
+
+      {/* LEADERBOARD MODAL */}
       {lbOpen && (
-        <div className="fixed inset-0 z-[999] bg-black/70 flex items-end sm:items-center justify-center p-3">
+        <div className="fixed inset-0 z-50 bg-black/70 flex items-end sm:items-center justify-center p-3">
           <div className="w-full max-w-[520px] rounded-3xl border border-white/10 bg-[#0b0f1a] shadow-xl overflow-hidden">
             <div className="p-4 flex items-center gap-2 border-b border-white/10">
               <div className="font-extrabold">🏆 Daily Leaderboard</div>
               <div className="ml-auto text-xs text-white/60">{dailyId}</div>
 
               <button
+                type="button"
                 onClick={() => fetchRemoteLeaderboard(dailyId).catch(() => {})}
                 className="ml-2 h-9 px-3 rounded-2xl bg-white/10 border border-white/15 text-white/80 font-semibold active:scale-[0.99]"
-                type="button"
               >
                 Refresh
               </button>
 
               <button
+                type="button"
                 onClick={() => setLbOpen(false)}
                 className="ml-2 h-9 px-3 rounded-2xl bg-white/10 border border-white/15 text-white/80 font-semibold active:scale-[0.99]"
-                type="button"
               >
                 Close
               </button>
@@ -1417,10 +1455,7 @@ export default function BrickBreakerMiniApp() {
               )}
 
               {boardToShow.length === 0 ? (
-                <div className="text-sm text-white/70">
-                  No scores yet. Play one run and you’ll appear here.
-                  <div className="mt-2 text-[12px] text-white/50">Tip: finish a Daily run to submit.</div>
-                </div>
+                <div className="text-sm text-white/70">No scores yet. Finish a daily run to appear here.</div>
               ) : (
                 <div className="space-y-2">
                   {boardToShow.map((e, idx) => {
@@ -1440,9 +1475,7 @@ export default function BrickBreakerMiniApp() {
                           isMe ? "bg-white/10 border-white/30" : "bg-white/5 border-white/10"
                         }`}
                       >
-                        <div className={`w-6 font-extrabold tabular-nums ${isMe ? "text-white" : "text-white/70"}`}>
-                          {idx + 1}
-                        </div>
+                        <div className={`w-6 font-extrabold tabular-nums ${isMe ? "text-white" : "text-white/70"}`}>{idx + 1}</div>
 
                         <div className="flex-1">
                           <div className="flex items-center gap-2">
@@ -1469,8 +1502,9 @@ export default function BrickBreakerMiniApp() {
         </div>
       )}
 
+      {/* TOAST */}
       {toast && (
-        <div className="fixed left-0 right-0 bottom-5 flex justify-center pointer-events-none z-[999]">
+        <div className="fixed left-0 right-0 bottom-24 flex justify-center pointer-events-none z-50">
           <div className="px-3 py-2 rounded-2xl bg-black/80 border border-white/10 text-white text-sm shadow">{toast}</div>
         </div>
       )}
