@@ -91,6 +91,16 @@ function circleRectCollide(cx: number, cy: number, r: number, rx: number, ry: nu
   return dx * dx + dy * dy <= r * r;
 }
 
+type MiniKitLike = {
+  ready?: () => void;
+  actions?: {
+    ready?: () => void;
+    share?: (data: { text: string }) => Promise<void> | void;
+  };
+  user?: { address?: string };
+  context?: { user?: { address?: string } };
+};
+
 export default function BrickBreakerMiniApp() {
   const miniKit = useMiniKit();
 
@@ -229,14 +239,14 @@ export default function BrickBreakerMiniApp() {
 
   // MiniKit lifecycle
   useEffect(() => {
-    const mk = miniKit as unknown as { ready?: () => void; actions?: { ready?: () => void } };
+    const mk = miniKit as unknown as MiniKitLike;
     mk.ready?.();
     mk.actions?.ready?.();
   }, [miniKit]);
 
   // Resolve user
   useEffect(() => {
-    const mk = miniKit as unknown as { user?: { address?: string }; context?: { user?: { address?: string } } };
+    const mk = miniKit as unknown as MiniKitLike;
     const addr = mk.user?.address ?? mk.context?.user?.address;
     const normalized = (addr || "").toLowerCase().trim();
     setUserAddr(normalized);
@@ -251,6 +261,7 @@ export default function BrickBreakerMiniApp() {
   const keyStreakCount = useCallback(() => `bb_${userKeyRef.current}_streak_count`, []);
   const keyPrefs = useCallback(() => `bb_${userKeyRef.current}_prefs`, []);
   const keyLeaderboard = useCallback(() => `bb_lb_${dailyIdRef.current}`, []);
+  const keySeenHint = useCallback(() => `bb_${userKeyRef.current}_seen_hint_${dailyIdRef.current}`, []);
 
   // scale
   useEffect(() => {
@@ -293,10 +304,10 @@ export default function BrickBreakerMiniApp() {
     if (!res.ok) {
       const err = isRecord(json) ? String(json.error ?? "leaderboard fetch failed") : "leaderboard fetch failed";
       setRemoteLbErr(err);
-      throw new Error(err);
+      setRemoteLb([]);
+      return;
     }
 
-    // API: { ok: true, items: [...] }
     const entriesRaw = isRecord(json) ? (json.items ?? json.entries ?? json.data ?? json.leaderboard) : json;
     if (!Array.isArray(entriesRaw)) {
       setRemoteLb([]);
@@ -310,7 +321,6 @@ export default function BrickBreakerMiniApp() {
         const scoreN = Number(e.score);
         const levelN = Number(e.level ?? e.lvl);
         const address = typeof e.address === "string" ? e.address.toLowerCase() : "";
-
         const name = typeof e.name === "string" ? e.name : shortAddr(address);
 
         const t =
@@ -323,7 +333,6 @@ export default function BrickBreakerMiniApp() {
                 : Date.now();
 
         if (!Number.isFinite(scoreN) || !Number.isFinite(levelN)) return null;
-
         return { name, score: scoreN, level: levelN, t: Number.isFinite(t) ? t : Date.now(), address };
       })
       .filter((x): x is RemoteLBEntry => x !== null);
@@ -451,6 +460,17 @@ export default function BrickBreakerMiniApp() {
     setAttemptsLeft(Infinity);
     attemptsLeftRef.current = Infinity;
   }, [dailyId, userKey]);
+
+  // Submission polish: first-time hint (once per day per user)
+  useEffect(() => {
+    try {
+      const seen = localStorage.getItem(keySeenHint());
+      if (!seen) {
+        localStorage.setItem(keySeenHint(), "1");
+        showToast("👆 Tap canvas to launch • Drag to move", 1700);
+      }
+    } catch {}
+  }, [keySeenHint, showToast]);
 
   const makeLevelBricks = useCallback(
     (lvl: number) => {
@@ -706,8 +726,7 @@ export default function BrickBreakerMiniApp() {
           showToast("🎁 Multiball (max)", 900);
           return;
         }
-        const base =
-          balls[0] ?? ({ x: paddleRef.current.x, y: paddleRef.current.y - 20, r: 7, vx: 0, vy: 0, launched: false } as Ball);
+        const base = balls[0] ?? { x: paddleRef.current.x, y: paddleRef.current.y - 20, r: 7, vx: 0, vy: 0, launched: false };
         const speed = baseBallSpeed();
 
         const mkBall = (dir: number): Ball => ({
@@ -728,7 +747,8 @@ export default function BrickBreakerMiniApp() {
     [baseBallSpeed, beep, haptic, showToast]
   );
 
-  async function shareScore() {
+  // ---------- FIX #1: Share works in Base App ----------
+  const shareScore = useCallback(async () => {
     const origin = typeof window !== "undefined" ? window.location.origin : "";
     const url = `${origin}/brick-breaker`;
 
@@ -750,8 +770,9 @@ export default function BrickBreakerMiniApp() {
       `Score: ${score} • Best: ${todayBest} • Streak: ${streak}🔥 • Level: ${level}\n` +
       `${attemptsLine}\n` +
       `Play: ${url}\n` +
-      `#Base #Onchain #MiniApp`;
+      `#Base #BaseApp #Onchain #MiniApp`;
 
+    // 1) Web Share API (some environments)
     try {
       if (typeof navigator !== "undefined" && "share" in navigator) {
         const shareFn = (navigator as Navigator & { share?: (data: { text?: string }) => Promise<void> }).share;
@@ -763,75 +784,99 @@ export default function BrickBreakerMiniApp() {
       }
     } catch {}
 
+    // 2) MiniKit share (Base App friendly)
+    try {
+      const mk = miniKit as unknown as MiniKitLike;
+      const share = mk.actions?.share;
+      if (share) {
+        await Promise.resolve(share({ text }));
+        showToast("Shared ✅", 1200);
+        return;
+      }
+    } catch {}
+
+    // 3) Clipboard fallback
     try {
       await navigator.clipboard.writeText(text);
       showToast("Copied ✅", 1200);
     } catch {
       showToast("Copy failed ❌", 1400);
     }
-  }
+  }, [dailyId, gameState, level, miniKit, practiceMode, score, showToast, streak, todayBest]);
+
+  // ---------- FIX #2: Leaderboard always opens (touch + click) ----------
+  const openLeaderboard = useCallback(() => {
+    setLbOpen(true);
+    haptic(10);
+    void fetchRemoteLeaderboard(dailyId);
+  }, [dailyId, fetchRemoteLeaderboard, haptic]);
+
+  // lock body scroll when modal open (mobile UX polish)
+  useEffect(() => {
+    if (!lbOpen) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, [lbOpen]);
 
   // pointer controls
   useEffect(() => {
-  const canvasEl = canvasRef.current;
-if (!canvasEl) return;
+    const canvasEl = canvasRef.current;
+    if (!canvasEl) return;
 
-const canvas = canvasEl;
+    const canvas = canvasEl;
 
-  
-  // local non-null snapshot
+    function toGameX(clientX: number) {
+      const rect = canvas.getBoundingClientRect();
+      return (clientX - rect.left) / scale;
+    }
 
-  function toGameX(clientX: number) {
-    const rect = canvas.getBoundingClientRect();
-    return (clientX - rect.left) / scale;
-  }
+    function onDown(e: PointerEvent) {
+      pointerDownRef.current = true;
+      canvas.setPointerCapture(e.pointerId);
 
-  function onDown(e: PointerEvent) {
-    pointerDownRef.current = true;
-    canvas.setPointerCapture(e.pointerId);
+      const gx = toGameX(e.clientX);
+      const p = paddleRef.current;
+      p.targetX = clamp(gx, p.w / 2 + ui.wall, GAME_W - p.w / 2 - ui.wall);
 
-    const gx = toGameX(e.clientX);
-    const p = paddleRef.current;
-    p.targetX = clamp(gx, p.w / 2 + ui.wall, GAME_W - p.w / 2 - ui.wall);
+      const gs = gameStateRef.current;
+      if (gs === "idle") launchBalls();
+      else if (gs === "paused") {
+        setGameState("running");
+        haptic(10);
+        beep(360, 40, 0.02);
+      } else if (gs === "win") nextLevelFn();
+      else if (gs === "gameover") resetGame(1);
+    }
 
-    const gs = gameStateRef.current;
-    if (gs === "idle") launchBalls();
-    else if (gs === "paused") {
-      setGameState("running");
-      haptic(10);
-      beep(360, 40, 0.02);
-    } else if (gs === "win") nextLevelFn();
-    else if (gs === "gameover") resetGame(1);
-  }
+    function onMove(e: PointerEvent) {
+      if (!pointerDownRef.current) return;
+      const gx = toGameX(e.clientX);
+      const p = paddleRef.current;
+      p.targetX = clamp(gx, p.w / 2 + ui.wall, GAME_W - p.w / 2 - ui.wall);
+    }
 
-  function onMove(e: PointerEvent) {
-    if (!pointerDownRef.current) return;
-    const gx = toGameX(e.clientX);
-    const p = paddleRef.current;
-    p.targetX = clamp(gx, p.w / 2 + ui.wall, GAME_W - p.w / 2 - ui.wall);
-  }
+    function onUp(e: PointerEvent) {
+      pointerDownRef.current = false;
+      try {
+        canvas.releasePointerCapture(e.pointerId);
+      } catch {}
+    }
 
-  function onUp(e: PointerEvent) {
-    pointerDownRef.current = false;
-    try {
-      canvas.releasePointerCapture(e.pointerId);
-    } catch {}
-  }
+    canvas.addEventListener("pointerdown", onDown, { passive: true });
+    canvas.addEventListener("pointermove", onMove, { passive: true });
+    canvas.addEventListener("pointerup", onUp);
+    canvas.addEventListener("pointercancel", onUp);
 
-  canvas.addEventListener("pointerdown", onDown, { passive: true });
-  canvas.addEventListener("pointermove", onMove, { passive: true });
-  canvas.addEventListener("pointerup", onUp);
-  canvas.addEventListener("pointercancel", onUp);
-
-  return () => {
-    canvas.removeEventListener("pointerdown", onDown);
-    canvas.removeEventListener("pointermove", onMove);
-    canvas.removeEventListener("pointerup", onUp);
-    canvas.removeEventListener("pointercancel", onUp);
-  };
-}, [beep, haptic, launchBalls, nextLevelFn, resetGame, scale, ui.wall]);
-
-
+    return () => {
+      canvas.removeEventListener("pointerdown", onDown);
+      canvas.removeEventListener("pointermove", onMove);
+      canvas.removeEventListener("pointerup", onUp);
+      canvas.removeEventListener("pointercancel", onUp);
+    };
+  }, [beep, haptic, launchBalls, nextLevelFn, resetGame, scale, ui.wall]);
 
   // Commit leaderboard on gameover once (daily only)
   const lastCommittedStateRef = useRef<GameState>("idle");
@@ -1179,6 +1224,10 @@ const canvas = canvasEl;
   const renderPillButton = (label: string, onClick: () => void) => (
     <button
       onClick={onClick}
+      onPointerUp={(e) => {
+        e.preventDefault();
+        onClick();
+      }}
       className="px-2 py-0.5 rounded-xl bg-white/10 border border-white/15 text-[11px] text-white/80 active:scale-[0.99]"
       type="button"
     >
@@ -1197,7 +1246,7 @@ const canvas = canvasEl;
   return (
     <div ref={containerRef} className="min-h-[100dvh] bg-black text-white w-full max-w-[520px] mx-auto px-3 py-4">
       {/* HEADER: clickable above canvas */}
-      <div className="mb-3 flex items-center gap-2 relative z-20">
+      <div className="mb-3 flex items-center gap-2 relative z-30">
         <Link
           href="/"
           className="h-10 px-3 rounded-2xl bg-white/10 text-white font-semibold border border-white/15 inline-flex items-center active:scale-[0.99]"
@@ -1270,8 +1319,12 @@ const canvas = canvasEl;
 
             <button
               type="button"
-              onClick={() => setLbOpen(true)}
-              className="px-3 py-1 rounded-xl bg-white/15 border border-white/20 text-[11px] text-white/90 font-semibold cursor-pointer pointer-events-auto active:scale-[0.99]"
+              onClick={openLeaderboard}
+              onPointerUp={(e) => {
+                e.preventDefault();
+                openLeaderboard();
+              }}
+              className="px-3 py-1 rounded-xl bg-white/15 border border-white/20 text-[11px] text-white/90 font-semibold cursor-pointer pointer-events-auto active:scale-[0.99] relative z-40"
             >
               🏆 Leaderboard
             </button>
@@ -1289,7 +1342,7 @@ const canvas = canvasEl;
         <canvas ref={canvasRef} className="block touch-none select-none" />
       </div>
 
-      <div className="mt-3 flex items-center gap-2">
+      <div className="mt-3 flex items-center gap-2 relative z-10">
         <button
           onClick={() => {
             if (gameState === "idle") return launchBalls();
@@ -1298,7 +1351,9 @@ const canvas = canvasEl;
             if (gameState === "gameover") return resetGame(1);
             if (gameState === "win") return nextLevelFn();
           }}
+          onPointerUp={(e) => e.preventDefault()}
           className="h-11 px-4 rounded-2xl font-extrabold active:scale-[0.99] bg-white text-black"
+          type="button"
         >
           {gameState === "idle" && "Start"}
           {gameState === "running" && "Pause"}
@@ -1309,14 +1364,18 @@ const canvas = canvasEl;
 
         <button
           onClick={() => resetGame(1)}
+          onPointerUp={(e) => e.preventDefault()}
           className="h-11 px-4 rounded-2xl bg-white/10 text-white font-semibold border border-white/15 active:scale-[0.99]"
+          type="button"
         >
           Reset
         </button>
 
         <button
-          onClick={shareScore}
+          onClick={() => void shareScore()}
+          onPointerUp={(e) => e.preventDefault()}
           className="h-11 px-4 rounded-2xl bg-white/10 text-white font-semibold border border-white/15 active:scale-[0.99]"
+          type="button"
         >
           {shareLabel}
         </button>
@@ -1327,7 +1386,7 @@ const canvas = canvasEl;
       </div>
 
       {lbOpen && (
-        <div className="fixed inset-0 z-50 bg-black/70 flex items-end sm:items-center justify-center p-3">
+        <div className="fixed inset-0 z-[999] bg-black/70 flex items-end sm:items-center justify-center p-3">
           <div className="w-full max-w-[520px] rounded-3xl border border-white/10 bg-[#0b0f1a] shadow-xl overflow-hidden">
             <div className="p-4 flex items-center gap-2 border-b border-white/10">
               <div className="font-extrabold">🏆 Daily Leaderboard</div>
@@ -1336,6 +1395,7 @@ const canvas = canvasEl;
               <button
                 onClick={() => fetchRemoteLeaderboard(dailyId).catch(() => {})}
                 className="ml-2 h-9 px-3 rounded-2xl bg-white/10 border border-white/15 text-white/80 font-semibold active:scale-[0.99]"
+                type="button"
               >
                 Refresh
               </button>
@@ -1343,6 +1403,7 @@ const canvas = canvasEl;
               <button
                 onClick={() => setLbOpen(false)}
                 className="ml-2 h-9 px-3 rounded-2xl bg-white/10 border border-white/15 text-white/80 font-semibold active:scale-[0.99]"
+                type="button"
               >
                 Close
               </button>
@@ -1356,7 +1417,10 @@ const canvas = canvasEl;
               )}
 
               {boardToShow.length === 0 ? (
-                <div className="text-sm text-white/70">No scores yet. Finish a daily run to appear here.</div>
+                <div className="text-sm text-white/70">
+                  No scores yet. Play one run and you’ll appear here.
+                  <div className="mt-2 text-[12px] text-white/50">Tip: finish a Daily run to submit.</div>
+                </div>
               ) : (
                 <div className="space-y-2">
                   {boardToShow.map((e, idx) => {
@@ -1406,10 +1470,8 @@ const canvas = canvasEl;
       )}
 
       {toast && (
-        <div className="fixed left-0 right-0 bottom-5 flex justify-center pointer-events-none z-50">
-          <div className="px-3 py-2 rounded-2xl bg-black/80 border border-white/10 text-white text-sm shadow">
-            {toast}
-          </div>
+        <div className="fixed left-0 right-0 bottom-5 flex justify-center pointer-events-none z-[999]">
+          <div className="px-3 py-2 rounded-2xl bg-black/80 border border-white/10 text-white text-sm shadow">{toast}</div>
         </div>
       )}
     </div>
