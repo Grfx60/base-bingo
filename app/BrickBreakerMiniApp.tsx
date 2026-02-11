@@ -172,6 +172,7 @@ export default function BrickBreakerMiniApp() {
 
   // --- Leaderboard (local + remote)
   const [lbOpen, setLbOpen] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
   const [lb, setLb] = useState<LBEntry[]>([]);
   const [remoteLb, setRemoteLb] = useState<RemoteLBEntry[]>([]);
   const [remoteLbErr, setRemoteLbErr] = useState<string | null>(null);
@@ -303,6 +304,22 @@ export default function BrickBreakerMiniApp() {
     compute();
     window.addEventListener("resize", compute);
     return () => window.removeEventListener("resize", compute);
+    // Close menu when tapping outside
+useEffect(() => {
+  function onDown(e: PointerEvent) {
+    const t = e.target as HTMLElement | null;
+    if (!t) return;
+
+    // If click is inside menu area, do nothing
+    if (t.closest?.("[data-menu-root]")) return;
+
+    setMenuOpen(false);
+  }
+
+  window.addEventListener("pointerdown", onDown);
+  return () => window.removeEventListener("pointerdown", onDown);
+}, []);
+
   }, []);
 
   // ---------------- Remote leaderboard helpers ----------------
@@ -1353,16 +1370,16 @@ export default function BrickBreakerMiniApp() {
         <div className="rounded-3xl border border-white/10 bg-white/[0.05] backdrop-blur-xl shadow-[0_0_0_1px_rgba(255,255,255,0.02)] px-4 py-3">
           <div className="flex items-start gap-3">
             <div className="flex-1">
-              <div className="flex items-center gap-3 text-[12px] text-white/80 font-semibold">
-                <div className="flex items-center gap-2">
+              <div className="flex items-center gap-3 text-[12px] text-white/80 font-semibold overflow-x-auto whitespace-nowrap no-scrollbar">
+                <div className="flex items-center gap-2 min-w-max">
                   <span className="text-white/70">📅</span>
                   <span>{prettyDate}</span>
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 min-w-max">
                   <span>🔥</span>
                   <span>Streak: {streak}</span>
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 min-w-max">
                   <span>🏆</span>
                   <span>Best: {todayBest}</span>
                 </div>
@@ -1386,14 +1403,83 @@ export default function BrickBreakerMiniApp() {
               </div>
             </div>
 
-            <button
-              type="button"
-              onClick={() => setLbOpen(true)}
-              className="pointer-events-auto h-10 w-10 rounded-2xl bg-white/10 border border-white/15 active:scale-[0.98] flex items-center justify-center"
-              aria-label="Open leaderboard"
-            >
-              🏆
-            </button>
+            <div className="relative pointer-events-auto" data-menu-root>
+  <button
+    type="button"
+    onClick={() => setMenuOpen((v) => !v)}
+    className="h-10 w-10 rounded-2xl bg-white/10 border border-white/15 active:scale-[0.98] flex items-center justify-center"
+    aria-label="Menu"
+  >
+    ☰
+  </button>
+
+  {menuOpen && (
+    <div className="absolute right-0 mt-2 w-[210px] rounded-3xl border border-white/10 bg-white/[0.06] backdrop-blur-xl shadow-xl overflow-hidden z-50">
+      <div className="px-4 py-3 text-[12px] text-white/90 font-semibold border-b border-white/10">
+        Menu
+      </div>
+
+      <div className="p-3 space-y-2 text-[13px]">
+        <button
+          type="button"
+          onClick={() => {
+            setSoundOn((v) => {
+              const next = !v;
+              if (next) {
+                ensureAudio();
+                beep(600, 40, 0.02);
+              }
+              showToast(next ? "Sound ON 🔊" : "Sound OFF 🔇", 900);
+              return next;
+            });
+          }}
+          className="w-full flex items-center justify-between px-3 py-2 rounded-2xl bg-white/5 border border-white/10 active:scale-[0.99]"
+        >
+          <span className="flex items-center gap-2">
+            <span>{soundOn ? "🔊" : "🔇"}</span>
+            <span className="text-white/80">Sound</span>
+          </span>
+          <span className="font-extrabold text-white/90">{soundOn ? "ON" : "OFF"}</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => {
+            setHapticsOn((v) => {
+              const next = !v;
+              if (next) haptic(20);
+              showToast(next ? "Haptics ON 📳" : "Haptics OFF 📴", 900);
+              return next;
+            });
+          }}
+          className="w-full flex items-center justify-between px-3 py-2 rounded-2xl bg-white/5 border border-white/10 active:scale-[0.99]"
+        >
+          <span className="flex items-center gap-2">
+            <span>{hapticsOn ? "📳" : "📴"}</span>
+            <span className="text-white/80">Haptics</span>
+          </span>
+          <span className="font-extrabold text-white/90">{hapticsOn ? "ON" : "OFF"}</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => {
+            setMenuOpen(false);
+            setLbOpen(true);
+          }}
+          className="w-full flex items-center justify-between px-3 py-2 rounded-2xl bg-white/5 border border-white/10 active:scale-[0.99]"
+        >
+          <span className="flex items-center gap-2">
+            <span>🏆</span>
+            <span className="text-white/80">Leaderboard</span>
+          </span>
+          <span className="font-extrabold text-white/90">Open</span>
+        </button>
+      </div>
+    </div>
+  )}
+</div>
+
           </div>
         </div>
       </div>
