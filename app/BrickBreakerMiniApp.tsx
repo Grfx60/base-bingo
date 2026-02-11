@@ -12,7 +12,6 @@ type LBEntry = { name: string; score: number; level: number; t: number };
 type PowerUpType = "widen" | "multiball" | "slow";
 type Drop = { x: number; y: number; vy: number; size: number; type: PowerUpType; alive: boolean };
 
-// Remote LB entry (normalized for UI; keep address for "You" highlight)
 type RemoteLBEntry = { name: string; score: number; level: number; t: number; address: string };
 
 // ---------- EIP-1193 + window declarations (no-any) ----------
@@ -153,7 +152,7 @@ export default function BrickBreakerMiniApp() {
   const [lives, setLives] = useState(3);
   const [level, setLevel] = useState(1);
 
-  // Keep latest score/level for accurate commits (avoid stale closure)
+  // Keep latest score/level for accurate commits
   const scoreRef = useRef(0);
   const levelRef = useRef(1);
   useEffect(() => void (scoreRef.current = score), [score]);
@@ -181,9 +180,9 @@ export default function BrickBreakerMiniApp() {
   const [toast, setToast] = useState<string | null>(null);
   const toastTimerRef = useRef<number | null>(null);
 
-  // Reference-ish resolution (we scale aggressively)
+  // Reference-ish resolution
   const GAME_W = 360;
-  const GAME_H = 560; // slightly taller: closer to reference feel
+  const GAME_H = 560;
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -269,7 +268,7 @@ export default function BrickBreakerMiniApp() {
   // Sync refs
   useEffect(() => void (gameStateRef.current = gameState), [gameState]);
 
-  // Resolve user (MiniKit-ish, no dependency)
+  // Resolve user (MiniKit-ish)
   useEffect(() => {
     const mk = (globalThis as unknown as { miniKit?: { user?: { address?: string }; context?: { user?: { address?: string } } } }).miniKit;
     const addr = mk?.user?.address ?? mk?.context?.user?.address;
@@ -287,39 +286,35 @@ export default function BrickBreakerMiniApp() {
   const keyPrefs = useCallback(() => `bb_${userKeyRef.current}_prefs`, []);
   const keyLeaderboard = useCallback(() => `bb_lb_${dailyIdRef.current}`, []);
 
-  // scale (more aggressive, like reference)
+  // scale (aggressive)
   useEffect(() => {
     function compute() {
       const card = gameCardRef.current;
       const root = containerRef.current;
       if (!card || !root) return;
 
-      const w = card.clientWidth; // already full-ish
-      // Try to keep game large, but not beyond height
+      const w = card.clientWidth;
       const availableH = Math.max(420, root.clientHeight - 150);
       const sW = w / GAME_W;
       const sH = availableH / GAME_H;
       setScale(clamp(Math.min(sW, sH), 1.0, 2.2));
     }
+
     compute();
     window.addEventListener("resize", compute);
     return () => window.removeEventListener("resize", compute);
-    // Close menu when tapping outside
-useEffect(() => {
-  function onDown(e: PointerEvent) {
-    const t = e.target as HTMLElement | null;
-    if (!t) return;
+  }, []);
 
-    // If click is inside menu area, do nothing
-    if (t.closest?.("[data-menu-root]")) return;
-
-    setMenuOpen(false);
-  }
-
-  window.addEventListener("pointerdown", onDown);
-  return () => window.removeEventListener("pointerdown", onDown);
-}, []);
-
+  // ✅ Close menu when tapping outside (THIS MUST BE ITS OWN useEffect)
+  useEffect(() => {
+    function onDown(e: PointerEvent) {
+      const t = e.target as HTMLElement | null;
+      if (!t) return;
+      if (t.closest?.("[data-menu-root]")) return;
+      setMenuOpen(false);
+    }
+    window.addEventListener("pointerdown", onDown);
+    return () => window.removeEventListener("pointerdown", onDown);
   }, []);
 
   // ---------------- Remote leaderboard helpers ----------------
@@ -333,11 +328,7 @@ useEffect(() => {
     const from = accounts?.[0];
     if (!from) return null;
 
-    const signature = await eth.request<string>({
-      method: "personal_sign",
-      params: [message, from],
-    });
-
+    const signature = await eth.request<string>({ method: "personal_sign", params: [message, from] });
     if (!signature) return null;
     return { address: from.toLowerCase(), signature };
   }, []);
@@ -420,7 +411,6 @@ useEffect(() => {
     },
     [dailyId, practiceMode, randomNonce, signMessageCompat]
   );
-  // ---------------------------------------------------------------------------
 
   // prefs load/save
   useEffect(() => {
@@ -506,12 +496,11 @@ useEffect(() => {
       const seed = hashStringToSeed(`${dailyIdRef.current}-${userKeyRef.current}-lvl-${lvl}`);
       const rand = mulberry32(seed);
 
-      // Reference-ish: keep it clean and consistent
       const rows = clamp(5 + Math.floor((lvl - 1) * 0.7), 5, 8);
       const cols = 7;
       const gap = ui.brickGap;
 
-      const top = ui.headerH + 24; // slightly lower like reference
+      const top = ui.headerH + 24;
       const side = 14;
       const usableW = GAME_W - side * 2;
       const brickW = Math.floor((usableW - gap * (cols - 1)) / cols);
@@ -670,10 +659,8 @@ useEffect(() => {
         t: Date.now(),
       };
 
-      // local
       saveLeaderboard(entry);
 
-      // remote (best-effort)
       submitRemoteScore(finalScore, finalLevel)
         .then(() => fetchRemoteLeaderboard(dailyId).catch(() => {}))
         .catch(() => {});
@@ -888,7 +875,6 @@ useEffect(() => {
     if (!ctx) return;
     const c = ctx;
 
-    // DPR + transform
     const dpr = Math.max(1, Math.floor(window.devicePixelRatio || 1));
     canvas.width = Math.floor(GAME_W * scale * dpr);
     canvas.height = Math.floor(GAME_H * scale * dpr);
@@ -896,7 +882,6 @@ useEffect(() => {
     canvas.style.height = `${GAME_H * scale}px`;
     c.setTransform(scale * dpr, 0, 0, scale * dpr, 0, 0);
 
-    // rounded rect helper
     function rr(x: number, y: number, w: number, h: number, r: number) {
       const rad = Math.max(0, Math.min(r, Math.min(w, h) / 2));
       c.beginPath();
@@ -908,7 +893,6 @@ useEffect(() => {
       c.closePath();
     }
 
-    // build noise pattern once per session/scale change
     function ensureNoisePattern() {
       if (noisePatternRef.current && noiseSeedRef.current === dpr) return;
 
@@ -920,7 +904,6 @@ useEffect(() => {
       if (!oc) return;
 
       const img = oc.createImageData(size, size);
-      // deterministic-ish but fine
       const seed = hashStringToSeed(`${dailyIdRef.current}-${userKeyRef.current}-noise`);
       const rand = mulberry32(seed);
       for (let i = 0; i < img.data.length; i += 4) {
@@ -984,8 +967,6 @@ useEffect(() => {
 
     function drawBrick(br: Brick, shimmer: number) {
       const r = 5;
-
-      // base gradient (glass-ish)
       const g = c.createLinearGradient(br.x, br.y, br.x, br.y + br.h);
       if (br.hp >= 2) {
         g.addColorStop(0, "rgba(150, 230, 255, 0.95)");
@@ -999,12 +980,10 @@ useEffect(() => {
       c.fillStyle = g;
       c.fill();
 
-      // inner highlight (top band)
       rr(br.x + 1, br.y + 1, br.w - 2, Math.max(3, br.h * 0.35), r);
       c.fillStyle = "rgba(255,255,255,0.14)";
       c.fill();
 
-      // subtle inner gradient sweep
       const inner = c.createLinearGradient(br.x, br.y, br.x + br.w, br.y + br.h);
       inner.addColorStop(0, "rgba(255,255,255,0.08)");
       inner.addColorStop(0.45, "rgba(255,255,255,0.00)");
@@ -1013,7 +992,6 @@ useEffect(() => {
       c.fillStyle = inner;
       c.fill();
 
-      // shimmer for hp2 bricks
       if (br.hp >= 2) {
         const sweepX = br.x + ((shimmer % 1) * (br.w + 26)) - 26;
         c.save();
@@ -1024,13 +1002,8 @@ useEffect(() => {
         c.restore();
       }
 
-      // outer stroke + inner stroke
       rr(br.x + 0.5, br.y + 0.5, br.w - 1, br.h - 1, r);
       c.strokeStyle = "rgba(255,255,255,0.10)";
-      c.stroke();
-
-      rr(br.x + 1.5, br.y + 1.5, br.w - 3, br.h - 3, Math.max(0, r - 1));
-      c.strokeStyle = "rgba(0,0,0,0.12)";
       c.stroke();
     }
 
@@ -1164,7 +1137,6 @@ useEffect(() => {
     }
 
     function drawBackground() {
-      // 1) deep gradient
       const g = c.createLinearGradient(0, 0, 0, GAME_H);
       g.addColorStop(0, "#0f1628");
       g.addColorStop(0.45, "#0b1020");
@@ -1172,21 +1144,12 @@ useEffect(() => {
       c.fillStyle = g;
       c.fillRect(0, 0, GAME_W, GAME_H);
 
-      // 2) subtle vignette (radial dark edges)
       const v = c.createRadialGradient(GAME_W / 2, GAME_H * 0.55, 60, GAME_W / 2, GAME_H * 0.55, GAME_W);
       v.addColorStop(0, "rgba(0,0,0,0)");
       v.addColorStop(1, "rgba(0,0,0,0.55)");
       c.fillStyle = v;
       c.fillRect(0, 0, GAME_W, GAME_H);
 
-      // 3) bottom glow (soft)
-      const b = c.createRadialGradient(GAME_W / 2, GAME_H * 1.05, 20, GAME_W / 2, GAME_H * 1.05, GAME_W * 0.9);
-      b.addColorStop(0, "rgba(255,255,255,0.08)");
-      b.addColorStop(1, "rgba(255,255,255,0)");
-      c.fillStyle = b;
-      c.fillRect(0, 0, GAME_W, GAME_H);
-
-      // 4) noise overlay
       ensureNoisePattern();
       const pat = noisePatternRef.current;
       if (pat) {
@@ -1200,24 +1163,15 @@ useEffect(() => {
 
     function draw() {
       c.clearRect(0, 0, GAME_W, GAME_H);
-
       drawBackground();
 
-      // top HUD strip inside canvas (thin like reference)
       c.fillStyle = "rgba(255,255,255,0.035)";
       c.fillRect(0, 0, GAME_W, ui.headerH);
 
       const shimmer = shimmerTRef.current;
 
-      for (const br of bricksRef.current) {
-        if (!br.alive) continue;
-        drawBrick(br, shimmer);
-      }
-
-      for (const d of dropsRef.current) {
-        if (!d.alive) continue;
-        drawDrop(d);
-      }
+      for (const br of bricksRef.current) if (br.alive) drawBrick(br, shimmer);
+      for (const d of dropsRef.current) if (d.alive) drawDrop(d);
 
       for (const p of particlesRef.current) {
         c.beginPath();
@@ -1228,7 +1182,6 @@ useEffect(() => {
 
       const p = paddleRef.current;
 
-      // paddle glow (softer, wider)
       c.save();
       c.globalAlpha = 0.22;
       rr(p.x - p.w / 2 - 10, p.y - 10, p.w + 20, p.h + 20, 12);
@@ -1236,18 +1189,11 @@ useEffect(() => {
       c.fill();
       c.restore();
 
-      // paddle body (rounded)
       rr(p.x - p.w / 2, p.y, p.w, p.h, 10);
       c.fillStyle = "rgba(255,255,255,0.92)";
       c.fill();
 
-      // slight top highlight
-      rr(p.x - p.w / 2 + 1, p.y + 1, p.w - 2, Math.max(2, p.h * 0.35), 9);
-      c.fillStyle = "rgba(255,255,255,0.14)";
-      c.fill();
-
       for (const b of ballsRef.current) {
-        // ball halo (softer)
         c.beginPath();
         c.arc(b.x, b.y, b.r + 7, 0, Math.PI * 2);
         c.fillStyle = "rgba(255, 209, 102, 0.10)";
@@ -1259,7 +1205,6 @@ useEffect(() => {
         c.fill();
       }
 
-      // Centered text like reference
       if (gameState === "idle") {
         c.save();
         c.textAlign = "center";
@@ -1323,28 +1268,11 @@ useEffect(() => {
     }
 
     rafRef.current = requestAnimationFrame(loop);
-
     return () => {
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
       rafRef.current = null;
     };
-  }, [
-    applyPowerUp,
-    beep,
-    commitLeaderboardIfNeeded,
-    gameState,
-    haptic,
-    loseLifeOrBall,
-    maybeUpdateDailyBest,
-    practiceInfiniteLives,
-    practiceMode,
-    resetBallsToPaddle,
-    scale,
-    spawnDropMaybe,
-    spawnWinParticles,
-    ui.headerH,
-    ui.wall,
-  ]);
+  }, [applyPowerUp, beep, commitLeaderboardIfNeeded, gameState, haptic, loseLifeOrBall, maybeUpdateDailyBest, practiceInfiniteLives, practiceMode, resetBallsToPaddle, scale, spawnDropMaybe, spawnWinParticles, ui.headerH, ui.wall]);
 
   // ---------- UI ----------
   const prettyDate = useMemo(() => formatDailyIdToPretty(dailyId), [dailyId]);
@@ -1360,26 +1288,26 @@ useEffect(() => {
       ref={containerRef}
       className="min-h-[100dvh] w-full bg-black text-white overflow-hidden"
       style={{
-        // page background (outside canvas) – subtle like reference
         background:
           "radial-gradient(1000px 700px at 50% 40%, rgba(255,255,255,0.06), rgba(0,0,0,0) 55%), linear-gradient(180deg, #070b14 0%, #000000 100%)",
       }}
     >
-      {/* TOP HUD (more compact, reference-ish) */}
+      {/* TOP HUD */}
       <div className="px-3 pt-3">
         <div className="rounded-3xl border border-white/10 bg-white/[0.05] backdrop-blur-xl shadow-[0_0_0_1px_rgba(255,255,255,0.02)] px-4 py-3">
           <div className="flex items-start gap-3">
             <div className="flex-1">
-              <div className="flex items-center gap-3 text-[12px] text-white/80 font-semibold overflow-x-auto whitespace-nowrap no-scrollbar">
-                <div className="flex items-center gap-2 min-w-max">
+              {/* ✅ single row, no wrap */}
+              <div className="flex items-center gap-3 text-[12px] text-white/80 font-semibold overflow-x-auto whitespace-nowrap no-scrollbar flex-nowrap">
+                <div className="flex items-center gap-2 min-w-max shrink-0">
                   <span className="text-white/70">📅</span>
                   <span>{prettyDate}</span>
                 </div>
-                <div className="flex items-center gap-2 min-w-max">
+                <div className="flex items-center gap-2 min-w-max shrink-0">
                   <span>🔥</span>
                   <span>Streak: {streak}</span>
                 </div>
-                <div className="flex items-center gap-2 min-w-max">
+                <div className="flex items-center gap-2 min-w-max shrink-0">
                   <span>🏆</span>
                   <span>Best: {todayBest}</span>
                 </div>
@@ -1403,88 +1331,147 @@ useEffect(() => {
               </div>
             </div>
 
+            {/* MENU BUTTON */}
             <div className="relative pointer-events-auto" data-menu-root>
-  <button
-    type="button"
-    onClick={() => setMenuOpen((v) => !v)}
-    className="h-10 w-10 rounded-2xl bg-white/10 border border-white/15 active:scale-[0.98] flex items-center justify-center"
-    aria-label="Menu"
-  >
-    ☰
-  </button>
+              <button
+                type="button"
+                onClick={() => setMenuOpen((v) => !v)}
+                className="h-10 w-10 rounded-2xl bg-white/10 border border-white/15 active:scale-[0.98] flex items-center justify-center"
+                aria-label="Menu"
+              >
+                ☰
+              </button>
 
-  {menuOpen && (
-    <div className="absolute right-0 mt-2 w-[210px] rounded-3xl border border-white/10 bg-white/[0.06] backdrop-blur-xl shadow-xl overflow-hidden z-50">
-      <div className="px-4 py-3 text-[12px] text-white/90 font-semibold border-b border-white/10">
-        Menu
-      </div>
+              {menuOpen && (
+                <div className="absolute right-0 mt-2 w-[220px] rounded-3xl border border-white/10 bg-white/[0.06] backdrop-blur-xl shadow-xl overflow-hidden z-50">
+                  <div className="px-4 py-3 text-[12px] text-white/90 font-semibold border-b border-white/10">Menu</div>
 
-      <div className="p-3 space-y-2 text-[13px]">
-        <button
-          type="button"
-          onClick={() => {
-            setSoundOn((v) => {
-              const next = !v;
-              if (next) {
-                ensureAudio();
-                beep(600, 40, 0.02);
-              }
-              showToast(next ? "Sound ON 🔊" : "Sound OFF 🔇", 900);
-              return next;
-            });
-          }}
-          className="w-full flex items-center justify-between px-3 py-2 rounded-2xl bg-white/5 border border-white/10 active:scale-[0.99]"
-        >
-          <span className="flex items-center gap-2">
-            <span>{soundOn ? "🔊" : "🔇"}</span>
-            <span className="text-white/80">Sound</span>
-          </span>
-          <span className="font-extrabold text-white/90">{soundOn ? "ON" : "OFF"}</span>
-        </button>
+                  <div className="p-3 space-y-2 text-[13px]">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSoundOn((v) => {
+                          const next = !v;
+                          if (next) {
+                            ensureAudio();
+                            beep(600, 40, 0.02);
+                          }
+                          showToast(next ? "Sound ON 🔊" : "Sound OFF 🔇", 900);
+                          return next;
+                        });
+                      }}
+                      className="w-full flex items-center justify-between px-3 py-2 rounded-2xl bg-white/5 border border-white/10 active:scale-[0.99]"
+                    >
+                      <span className="flex items-center gap-2">
+                        <span>{soundOn ? "🔊" : "🔇"}</span>
+                        <span className="text-white/80">Sound</span>
+                      </span>
+                      <span className="font-extrabold text-white/90">{soundOn ? "ON" : "OFF"}</span>
+                    </button>
 
-        <button
-          type="button"
-          onClick={() => {
-            setHapticsOn((v) => {
-              const next = !v;
-              if (next) haptic(20);
-              showToast(next ? "Haptics ON 📳" : "Haptics OFF 📴", 900);
-              return next;
-            });
-          }}
-          className="w-full flex items-center justify-between px-3 py-2 rounded-2xl bg-white/5 border border-white/10 active:scale-[0.99]"
-        >
-          <span className="flex items-center gap-2">
-            <span>{hapticsOn ? "📳" : "📴"}</span>
-            <span className="text-white/80">Haptics</span>
-          </span>
-          <span className="font-extrabold text-white/90">{hapticsOn ? "ON" : "OFF"}</span>
-        </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setHapticsOn((v) => {
+                          const next = !v;
+                          if (next) haptic(20);
+                          showToast(next ? "Haptics ON 📳" : "Haptics OFF 📴", 900);
+                          return next;
+                        });
+                      }}
+                      className="w-full flex items-center justify-between px-3 py-2 rounded-2xl bg-white/5 border border-white/10 active:scale-[0.99]"
+                    >
+                      <span className="flex items-center gap-2">
+                        <span>{hapticsOn ? "📳" : "📴"}</span>
+                        <span className="text-white/80">Haptics</span>
+                      </span>
+                      <span className="font-extrabold text-white/90">{hapticsOn ? "ON" : "OFF"}</span>
+                    </button>
 
-        <button
-          type="button"
-          onClick={() => {
-            setMenuOpen(false);
-            setLbOpen(true);
-          }}
-          className="w-full flex items-center justify-between px-3 py-2 rounded-2xl bg-white/5 border border-white/10 active:scale-[0.99]"
-        >
-          <span className="flex items-center gap-2">
-            <span>🏆</span>
-            <span className="text-white/80">Leaderboard</span>
-          </span>
-          <span className="font-extrabold text-white/90">Open</span>
-        </button>
-      </div>
-    </div>
-  )}
-</div>
+                    <div className="w-full flex items-center justify-between px-3 py-2 rounded-2xl bg-white/5 border border-white/10">
+                      <span className="flex items-center gap-2">
+                        <span>∞</span>
+                        <span className="text-white/80">Attempts</span>
+                      </span>
+                      <span className="font-extrabold text-white/90">{attemptsLeft === Infinity ? "∞" : String(attemptsLeft)}</span>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPracticeMode((v) => {
+                          const next = !v;
+                          showToast(next ? "Practice mode 🧪" : "Daily mode 🎯", 1000);
+                          haptic(20);
+                          beep(next ? 500 : 700, 40, 0.02);
+
+                          setPracticeInfiniteLives(false);
+                          setScore(0);
+                          setLives(3);
+                          setLevel(1);
+                          makeLevelBricks(1);
+                          resetRound();
+                          setGameState("idle");
+                          particlesRef.current = [];
+                          lastCommitKeyRef.current = "";
+                          return next;
+                        });
+                      }}
+                      className="w-full flex items-center justify-between px-3 py-2 rounded-2xl bg-white/5 border border-white/10 active:scale-[0.99]"
+                    >
+                      <span className="flex items-center gap-2">
+                        <span>{practiceMode ? "🧪" : "🎯"}</span>
+                        <span className="text-white/80">Mode</span>
+                      </span>
+                      <span className="font-extrabold text-white/90">{practiceMode ? "Practice" : "Daily"}</span>
+                    </button>
+
+                    {practiceMode && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setPracticeInfiniteLives((v) => {
+                            const next = !v;
+                            showToast(next ? "Infinite lives ❤️∞" : "Lives normal ❤️", 1000);
+                            haptic(15);
+                            beep(next ? 860 : 420, 35, 0.02);
+                            return next;
+                          });
+                        }}
+                        className="w-full flex items-center justify-between px-3 py-2 rounded-2xl bg-white/5 border border-white/10 active:scale-[0.99]"
+                      >
+                        <span className="flex items-center gap-2">
+                          <span>❤️</span>
+                          <span className="text-white/80">Lives</span>
+                        </span>
+                        <span className="font-extrabold text-white/90">{practiceInfiniteLives ? "∞" : "3"}</span>
+                      </button>
+                    )}
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMenuOpen(false);
+                        setLbOpen(true);
+                      }}
+                      className="w-full flex items-center justify-between px-3 py-2 rounded-2xl bg-white/5 border border-white/10 active:scale-[0.99]"
+                    >
+                      <span className="flex items-center gap-2">
+                        <span>🏆</span>
+                        <span className="text-white/80">Leaderboard</span>
+                      </span>
+                      <span className="font-extrabold text-white/90">Open</span>
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
 
           </div>
         </div>
       </div>
 
-      {/* GAME AREA (bigger, minimal padding) */}
+      {/* GAME AREA */}
       <div className="px-3 pt-2 pb-24">
         <div
           ref={gameCardRef}
@@ -1494,117 +1481,7 @@ useEffect(() => {
         </div>
       </div>
 
-      {/* FLOATING SETTINGS (top-right, closer to ref) */}
-      <div className="pointer-events-none fixed top-4 right-3 z-30">
-        <div className="pointer-events-auto w-[205px] rounded-3xl border border-white/10 bg-white/[0.05] backdrop-blur-xl shadow-xl overflow-hidden">
-          <div className="px-4 py-3 text-[12px] text-white/90 font-semibold border-b border-white/10">Settings</div>
-
-          <div className="p-3 space-y-2 text-[13px]">
-            <button
-              type="button"
-              onClick={() => {
-                setSoundOn((v) => {
-                  const next = !v;
-                  if (next) {
-                    ensureAudio();
-                    beep(600, 40, 0.02);
-                  }
-                  showToast(next ? "Sound ON 🔊" : "Sound OFF 🔇", 900);
-                  return next;
-                });
-              }}
-              className="w-full flex items-center justify-between px-3 py-2 rounded-2xl bg-white/5 border border-white/10 active:scale-[0.99]"
-            >
-              <span className="flex items-center gap-2">
-                <span>{soundOn ? "🔊" : "🔇"}</span>
-                <span className="text-white/80">Sound</span>
-              </span>
-              <span className="font-extrabold text-white/90">{soundOn ? "ON" : "OFF"}</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => {
-                setHapticsOn((v) => {
-                  const next = !v;
-                  if (next) haptic(20);
-                  showToast(next ? "Haptics ON 📳" : "Haptics OFF 📴", 900);
-                  return next;
-                });
-              }}
-              className="w-full flex items-center justify-between px-3 py-2 rounded-2xl bg-white/5 border border-white/10 active:scale-[0.99]"
-            >
-              <span className="flex items-center gap-2">
-                <span>{hapticsOn ? "📳" : "📴"}</span>
-                <span className="text-white/80">Haptics</span>
-              </span>
-              <span className="font-extrabold text-white/90">{hapticsOn ? "ON" : "OFF"}</span>
-            </button>
-
-            <div className="w-full flex items-center justify-between px-3 py-2 rounded-2xl bg-white/5 border border-white/10">
-              <span className="flex items-center gap-2">
-                <span>∞</span>
-                <span className="text-white/80">Attempts</span>
-              </span>
-              <span className="font-extrabold text-white/90">{attemptsLeft === Infinity ? "∞" : String(attemptsLeft)}</span>
-            </div>
-
-            <button
-              type="button"
-              onClick={() => {
-                setPracticeMode((v) => {
-                  const next = !v;
-                  showToast(next ? "Practice mode 🧪" : "Daily mode 🎯", 1000);
-                  haptic(20);
-                  beep(next ? 500 : 700, 40, 0.02);
-
-                  setPracticeInfiniteLives(false);
-                  setScore(0);
-                  setLives(3);
-                  setLevel(1);
-                  makeLevelBricks(1);
-                  resetRound();
-                  setGameState("idle");
-                  particlesRef.current = [];
-                  lastCommitKeyRef.current = "";
-                  return next;
-                });
-              }}
-              className="w-full flex items-center justify-between px-3 py-2 rounded-2xl bg-white/5 border border-white/10 active:scale-[0.99]"
-            >
-              <span className="flex items-center gap-2">
-                <span>{practiceMode ? "🧪" : "🎯"}</span>
-                <span className="text-white/80">Mode</span>
-              </span>
-              <span className="font-extrabold text-white/90">{practiceMode ? "Practice" : "Daily"}</span>
-            </button>
-
-            {practiceMode && (
-              <button
-                type="button"
-                onClick={() => {
-                  setPracticeInfiniteLives((v) => {
-                    const next = !v;
-                    showToast(next ? "Infinite lives ❤️∞" : "Lives normal ❤️", 1000);
-                    haptic(15);
-                    beep(next ? 860 : 420, 35, 0.02);
-                    return next;
-                  });
-                }}
-                className="w-full flex items-center justify-between px-3 py-2 rounded-2xl bg-white/5 border border-white/10 active:scale-[0.99]"
-              >
-                <span className="flex items-center gap-2">
-                  <span>❤️</span>
-                  <span className="text-white/80">Lives</span>
-                </span>
-                <span className="font-extrabold text-white/90">{practiceInfiniteLives ? "∞" : "3"}</span>
-              </button>
-            )}
-          </div>
-        </div>
-      </div>
-
-      {/* BOTTOM CONTROL BAR (clean) */}
+      {/* BOTTOM CONTROL BAR */}
       <div className="pointer-events-none fixed bottom-4 left-0 right-0 z-40 flex justify-center">
         <div className="pointer-events-auto w-[320px] rounded-3xl border border-white/10 bg-white/[0.05] backdrop-blur-xl shadow-xl px-5 py-3 flex items-center justify-between">
           <IconButton
