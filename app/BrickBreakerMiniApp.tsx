@@ -12,6 +12,7 @@ type LBEntry = { name: string; score: number; level: number; t: number };
 type PowerUpType = "widen" | "multiball" | "slow";
 type Drop = { x: number; y: number; vy: number; size: number; type: PowerUpType; alive: boolean };
 
+// Remote LB entry (normalized for UI; keep address for "You" highlight)
 type RemoteLBEntry = { name: string; score: number; level: number; t: number; address: string };
 
 // ---------- EIP-1193 + window declarations (no-any) ----------
@@ -180,7 +181,7 @@ export default function BrickBreakerMiniApp() {
   const [toast, setToast] = useState<string | null>(null);
   const toastTimerRef = useRef<number | null>(null);
 
-  // Reference-ish resolution
+  // Reference resolution
   const GAME_W = 360;
   const GAME_H = 560;
 
@@ -286,7 +287,7 @@ export default function BrickBreakerMiniApp() {
   const keyPrefs = useCallback(() => `bb_${userKeyRef.current}_prefs`, []);
   const keyLeaderboard = useCallback(() => `bb_lb_${dailyIdRef.current}`, []);
 
-  // scale (aggressive)
+  // scale
   useEffect(() => {
     function compute() {
       const card = gameCardRef.current;
@@ -305,12 +306,12 @@ export default function BrickBreakerMiniApp() {
     return () => window.removeEventListener("resize", compute);
   }, []);
 
-  // ✅ Close menu when tapping outside (THIS MUST BE ITS OWN useEffect)
+  // ✅ Menü dışına tıklanınca kapat
   useEffect(() => {
     function onDown(e: PointerEvent) {
       const t = e.target as HTMLElement | null;
       if (!t) return;
-      if (t.closest?.("[data-menu-root]")) return;
+      if (t.closest?.("[data-menu-root]")) return; // menünün içi ise kapatma
       setMenuOpen(false);
     }
     window.addEventListener("pointerdown", onDown);
@@ -328,7 +329,11 @@ export default function BrickBreakerMiniApp() {
     const from = accounts?.[0];
     if (!from) return null;
 
-    const signature = await eth.request<string>({ method: "personal_sign", params: [message, from] });
+    const signature = await eth.request<string>({
+      method: "personal_sign",
+      params: [message, from],
+    });
+
     if (!signature) return null;
     return { address: from.toLowerCase(), signature };
   }, []);
@@ -411,6 +416,7 @@ export default function BrickBreakerMiniApp() {
     },
     [dailyId, practiceMode, randomNonce, signMessageCompat]
   );
+  // ---------------------------------------------------------------------------
 
   // prefs load/save
   useEffect(() => {
@@ -659,8 +665,10 @@ export default function BrickBreakerMiniApp() {
         t: Date.now(),
       };
 
+      // local
       saveLeaderboard(entry);
 
+      // remote (best-effort)
       submitRemoteScore(finalScore, finalLevel)
         .then(() => fetchRemoteLeaderboard(dailyId).catch(() => {}))
         .catch(() => {});
@@ -980,17 +988,9 @@ export default function BrickBreakerMiniApp() {
       c.fillStyle = g;
       c.fill();
 
-      rr(br.x + 1, br.y + 1, br.w - 2, Math.max(3, br.h * 0.35), r);
-      c.fillStyle = "rgba(255,255,255,0.14)";
-      c.fill();
-
-      const inner = c.createLinearGradient(br.x, br.y, br.x + br.w, br.y + br.h);
-      inner.addColorStop(0, "rgba(255,255,255,0.08)");
-      inner.addColorStop(0.45, "rgba(255,255,255,0.00)");
-      inner.addColorStop(1, "rgba(0,0,0,0.10)");
-      rr(br.x + 1, br.y + 1, br.w - 2, br.h - 2, r - 1);
-      c.fillStyle = inner;
-      c.fill();
+      rr(br.x + 0.5, br.y + 0.5, br.w - 1, br.h - 1, r);
+      c.strokeStyle = "rgba(255,255,255,0.10)";
+      c.stroke();
 
       if (br.hp >= 2) {
         const sweepX = br.x + ((shimmer % 1) * (br.w + 26)) - 26;
@@ -1001,10 +1001,6 @@ export default function BrickBreakerMiniApp() {
         c.fillRect(sweepX, br.y, 18, br.h);
         c.restore();
       }
-
-      rr(br.x + 0.5, br.y + 0.5, br.w - 1, br.h - 1, r);
-      c.strokeStyle = "rgba(255,255,255,0.10)";
-      c.stroke();
     }
 
     function drawDrop(d: Drop) {
@@ -1144,12 +1140,6 @@ export default function BrickBreakerMiniApp() {
       c.fillStyle = g;
       c.fillRect(0, 0, GAME_W, GAME_H);
 
-      const v = c.createRadialGradient(GAME_W / 2, GAME_H * 0.55, 60, GAME_W / 2, GAME_H * 0.55, GAME_W);
-      v.addColorStop(0, "rgba(0,0,0,0)");
-      v.addColorStop(1, "rgba(0,0,0,0.55)");
-      c.fillStyle = v;
-      c.fillRect(0, 0, GAME_W, GAME_H);
-
       ensureNoisePattern();
       const pat = noisePatternRef.current;
       if (pat) {
@@ -1182,23 +1172,11 @@ export default function BrickBreakerMiniApp() {
 
       const p = paddleRef.current;
 
-      c.save();
-      c.globalAlpha = 0.22;
-      rr(p.x - p.w / 2 - 10, p.y - 10, p.w + 20, p.h + 20, 12);
-      c.fillStyle = "rgba(120, 200, 255, 0.45)";
-      c.fill();
-      c.restore();
-
       rr(p.x - p.w / 2, p.y, p.w, p.h, 10);
       c.fillStyle = "rgba(255,255,255,0.92)";
       c.fill();
 
       for (const b of ballsRef.current) {
-        c.beginPath();
-        c.arc(b.x, b.y, b.r + 7, 0, Math.PI * 2);
-        c.fillStyle = "rgba(255, 209, 102, 0.10)";
-        c.fill();
-
         c.beginPath();
         c.arc(b.x, b.y, b.r, 0, Math.PI * 2);
         c.fillStyle = "#ffd166";
@@ -1268,11 +1246,28 @@ export default function BrickBreakerMiniApp() {
     }
 
     rafRef.current = requestAnimationFrame(loop);
+
     return () => {
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
       rafRef.current = null;
     };
-  }, [applyPowerUp, beep, commitLeaderboardIfNeeded, gameState, haptic, loseLifeOrBall, maybeUpdateDailyBest, practiceInfiniteLives, practiceMode, resetBallsToPaddle, scale, spawnDropMaybe, spawnWinParticles, ui.headerH, ui.wall]);
+  }, [
+    applyPowerUp,
+    beep,
+    commitLeaderboardIfNeeded,
+    gameState,
+    haptic,
+    loseLifeOrBall,
+    maybeUpdateDailyBest,
+    practiceInfiniteLives,
+    practiceMode,
+    resetBallsToPaddle,
+    scale,
+    spawnDropMaybe,
+    spawnWinParticles,
+    ui.headerH,
+    ui.wall,
+  ]);
 
   // ---------- UI ----------
   const prettyDate = useMemo(() => formatDailyIdToPretty(dailyId), [dailyId]);
@@ -1296,20 +1291,21 @@ export default function BrickBreakerMiniApp() {
       <div className="px-3 pt-3">
         <div className="rounded-3xl border border-white/10 bg-white/[0.05] backdrop-blur-xl shadow-[0_0_0_1px_rgba(255,255,255,0.02)] px-4 py-3">
           <div className="flex items-start gap-3">
-            <div className="flex-1">
-              {/* ✅ single row, no wrap */}
-              <div className="flex flex-row flex-nowrap items-center gap-3 overflow-x-auto whitespace-nowrap no-scrollbar text-[12px] text-white/80 font-semibold">
+            {/* ✅ min-w-0: satırın kırılmasını/taşmasını düzgün yapar */}
+            <div className="flex-1 min-w-0">
+              {/* ✅ ÜST SATIR: TEK SATIR, TAŞARSA YANA KAYAR */}
+              <div className="flex flex-row flex-nowrap items-center gap-3 overflow-x-auto whitespace-nowrap no-scrollbar text-[12px] text-white/80 font-semibold w-full">
                 <div className="flex items-center gap-2 min-w-max shrink-0 whitespace-nowrap">
-
                   <span className="text-white/70">📅</span>
                   <span>{prettyDate}</span>
                 </div>
+
                 <div className="flex items-center gap-2 min-w-max shrink-0 whitespace-nowrap">
                   <span>🔥</span>
                   <span>Streak: {streak}</span>
                 </div>
-                <div className="flex items-center gap-2 min-w-max shrink-0 whitespace-nowrap">
 
+                <div className="flex items-center gap-2 min-w-max shrink-0 whitespace-nowrap">
                   <span>🏆</span>
                   <span>Best: {todayBest}</span>
                 </div>
