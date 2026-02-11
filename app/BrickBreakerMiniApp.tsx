@@ -1298,16 +1298,18 @@ export default function BrickBreakerMiniApp() {
           <div className="flex items-start gap-3">
             <div className="flex-1">
               {/* ✅ single row, no wrap */}
-              <div className="flex items-center gap-3 text-[12px] text-white/80 font-semibold overflow-x-auto whitespace-nowrap no-scrollbar flex-nowrap">
-                <div className="flex items-center gap-2 min-w-max shrink-0">
+              <div className="flex flex-row flex-nowrap items-center gap-3 overflow-x-auto whitespace-nowrap no-scrollbar text-[12px] text-white/80 font-semibold">
+                <div className="flex items-center gap-2 min-w-max shrink-0 whitespace-nowrap">
+
                   <span className="text-white/70">📅</span>
                   <span>{prettyDate}</span>
                 </div>
-                <div className="flex items-center gap-2 min-w-max shrink-0">
+                <div className="flex items-center gap-2 min-w-max shrink-0 whitespace-nowrap">
                   <span>🔥</span>
                   <span>Streak: {streak}</span>
                 </div>
-                <div className="flex items-center gap-2 min-w-max shrink-0">
+                <div className="flex items-center gap-2 min-w-max shrink-0 whitespace-nowrap">
+
                   <span>🏆</span>
                   <span>Best: {todayBest}</span>
                 </div>
