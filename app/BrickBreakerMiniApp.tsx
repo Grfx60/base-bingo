@@ -90,7 +90,6 @@ function circleRectCollide(cx: number, cy: number, r: number, rx: number, ry: nu
 }
 
 function formatDailyIdToPretty(dailyId: string) {
-  // dailyId: YYYY-MM-DD
   const [y, m, d] = dailyId.split("-").map(Number);
   const dt = new Date(y, (m || 1) - 1, d || 1);
   try {
@@ -181,11 +180,14 @@ export default function BrickBreakerMiniApp() {
   const [toast, setToast] = useState<string | null>(null);
   const toastTimerRef = useRef<number | null>(null);
 
+  // Reference-ish resolution (we scale aggressively)
   const GAME_W = 360;
-  const GAME_H = 520;
+  const GAME_H = 560; // slightly taller: closer to reference feel
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const gameCardRef = useRef<HTMLDivElement | null>(null);
+
   const rafRef = useRef<number | null>(null);
   const lastTRef = useRef<number>(0);
   const pointerDownRef = useRef(false);
@@ -194,8 +196,8 @@ export default function BrickBreakerMiniApp() {
   const [scale, setScale] = useState(1);
 
   // Paddle smoothing
-  const paddleRef = useRef({ x: GAME_W / 2, targetX: GAME_W / 2, y: GAME_H - 54, w: 92, h: 18 });
-  const ballsRef = useRef<Ball[]>([{ x: GAME_W / 2, y: GAME_H - 74, r: 7, vx: 0, vy: 0, launched: false }]);
+  const paddleRef = useRef({ x: GAME_W / 2, targetX: GAME_W / 2, y: GAME_H - 64, w: 98, h: 18 });
+  const ballsRef = useRef<Ball[]>([{ x: GAME_W / 2, y: GAME_H - 84, r: 7, vx: 0, vy: 0, launched: false }]);
 
   const bricksRef = useRef<Brick[]>([]);
   const particlesRef = useRef<Particle[]>([]);
@@ -208,7 +210,11 @@ export default function BrickBreakerMiniApp() {
   // Prevent duplicate commits per state/day
   const lastCommitKeyRef = useRef<string>("");
 
-  const ui = useMemo(() => ({ headerH: 44, wall: 10, brickGap: 6 }), []);
+  // Background noise pattern cache
+  const noisePatternRef = useRef<CanvasPattern | null>(null);
+  const noiseSeedRef = useRef<number>(0);
+
+  const ui = useMemo(() => ({ headerH: 46, wall: 10, brickGap: 6 }), []);
 
   // --- Audio
   const audioCtxRef = useRef<AudioContext | null>(null);
@@ -280,12 +286,19 @@ export default function BrickBreakerMiniApp() {
   const keyPrefs = useCallback(() => `bb_${userKeyRef.current}_prefs`, []);
   const keyLeaderboard = useCallback(() => `bb_lb_${dailyIdRef.current}`, []);
 
-  // scale
+  // scale (more aggressive, like reference)
   useEffect(() => {
     function compute() {
-      const el = containerRef.current;
-      if (!el) return;
-      setScale(clamp(el.clientWidth / GAME_W, 0.9, 1.6));
+      const card = gameCardRef.current;
+      const root = containerRef.current;
+      if (!card || !root) return;
+
+      const w = card.clientWidth; // already full-ish
+      // Try to keep game large, but not beyond height
+      const availableH = Math.max(420, root.clientHeight - 150);
+      const sW = w / GAME_W;
+      const sH = availableH / GAME_H;
+      setScale(clamp(Math.min(sW, sH), 1.0, 2.2));
     }
     compute();
     window.addEventListener("resize", compute);
@@ -324,7 +337,6 @@ export default function BrickBreakerMiniApp() {
       throw new Error(err);
     }
 
-    // API: { ok: true, items: [...] }
     const entriesRaw = isRecord(json) ? (json.items ?? json.entries ?? json.data ?? json.leaderboard) : json;
     if (!Array.isArray(entriesRaw)) {
       setRemoteLb([]);
@@ -338,7 +350,6 @@ export default function BrickBreakerMiniApp() {
         const scoreN = Number(e.score);
         const levelN = Number(e.level ?? e.lvl);
         const address = typeof e.address === "string" ? e.address.toLowerCase() : "";
-
         const name = typeof e.name === "string" ? e.name : shortAddr(address);
 
         const t =
@@ -351,7 +362,6 @@ export default function BrickBreakerMiniApp() {
                 : Date.now();
 
         if (!Number.isFinite(scoreN) || !Number.isFinite(levelN)) return null;
-
         return { name, score: scoreN, level: levelN, t: Number.isFinite(t) ? t : Date.now(), address };
       })
       .filter((x): x is RemoteLBEntry => x !== null);
@@ -479,10 +489,12 @@ export default function BrickBreakerMiniApp() {
       const seed = hashStringToSeed(`${dailyIdRef.current}-${userKeyRef.current}-lvl-${lvl}`);
       const rand = mulberry32(seed);
 
-      const rows = clamp(4 + Math.floor((lvl - 1) * 1.2), 4, 8);
+      // Reference-ish: keep it clean and consistent
+      const rows = clamp(5 + Math.floor((lvl - 1) * 0.7), 5, 8);
       const cols = 7;
       const gap = ui.brickGap;
-      const top = ui.headerH + 18;
+
+      const top = ui.headerH + 24; // slightly lower like reference
       const side = 14;
       const usableW = GAME_W - side * 2;
       const brickW = Math.floor((usableW - gap * (cols - 1)) / cols);
@@ -509,14 +521,15 @@ export default function BrickBreakerMiniApp() {
 
   const resetBallsToPaddle = useCallback(() => {
     const p = paddleRef.current;
-    ballsRef.current = [{ x: p.x, y: p.y - 20, r: 7, vx: 0, vy: 0, launched: false }];
+    ballsRef.current = [{ x: p.x, y: p.y - 22, r: 7, vx: 0, vy: 0, launched: false }];
   }, []);
 
   const resetRound = useCallback(() => {
     const p = paddleRef.current;
     p.x = GAME_W / 2;
     p.targetX = GAME_W / 2;
-    p.w = 92;
+    p.y = GAME_H - 64;
+    p.w = 98;
     p.h = 18;
 
     slowUntilRef.current = 0;
@@ -561,7 +574,7 @@ export default function BrickBreakerMiniApp() {
   const baseBallSpeed = useCallback(() => {
     const now = performance.now();
     const slow = now < slowUntilRef.current;
-    return slow ? 190 : 240;
+    return slow ? 190 : 245;
   }, []);
 
   const launchBalls = useCallback(() => {
@@ -575,7 +588,7 @@ export default function BrickBreakerMiniApp() {
 
     for (const b of balls) {
       b.x = p.x;
-      b.y = p.y - 20;
+      b.y = p.y - 22;
       b.launched = true;
 
       const base = (Math.random() * 0.6 + 0.2) * (Math.random() < 0.5 ? -1 : 1);
@@ -606,8 +619,8 @@ export default function BrickBreakerMiniApp() {
       parts.push({
         x: rand() * GAME_W,
         y: ui.headerH + rand() * 40,
-        vx: (rand() * 2 - 1) * 150,
-        vy: -rand() * 240,
+        vx: (rand() * 2 - 1) * 160,
+        vy: -rand() * 260,
         r: 2 + rand() * 3,
         life: 1.2 + rand() * 0.9,
       });
@@ -695,8 +708,7 @@ export default function BrickBreakerMiniApp() {
 
       const pick = Math.random();
       const type: PowerUpType = pick < 0.34 ? "widen" : pick < 0.67 ? "slow" : "multiball";
-
-      dropsRef.current.push({ x, y, vy: 110, size: 12, type, alive: true });
+      dropsRef.current.push({ x, y, vy: 120, size: 12, type, alive: true });
     },
     [practiceMode]
   );
@@ -720,7 +732,7 @@ export default function BrickBreakerMiniApp() {
           showToast("🎁 Multiball (max)", 900);
           return;
         }
-        const base = balls[0] ?? { x: paddleRef.current.x, y: paddleRef.current.y - 20, r: 7, vx: 0, vy: 0, launched: false };
+        const base = balls[0] ?? { x: paddleRef.current.x, y: paddleRef.current.y - 22, r: 7, vx: 0, vy: 0, launched: false };
         const speed = baseBallSpeed();
 
         const mkBall = (dir: number): Ball => ({
@@ -773,9 +785,7 @@ export default function BrickBreakerMiniApp() {
           return;
         }
       }
-    } catch {
-      // fallthrough to clipboard
-    }
+    } catch {}
 
     try {
       await navigator.clipboard.writeText(text);
@@ -789,7 +799,6 @@ export default function BrickBreakerMiniApp() {
   useEffect(() => {
     const canvasEl = canvasRef.current;
     if (!canvasEl) return;
-
     const canvas = canvasEl;
 
     function toGameX(clientX: number) {
@@ -862,12 +871,54 @@ export default function BrickBreakerMiniApp() {
     if (!ctx) return;
     const c = ctx;
 
+    // DPR + transform
     const dpr = Math.max(1, Math.floor(window.devicePixelRatio || 1));
     canvas.width = Math.floor(GAME_W * scale * dpr);
     canvas.height = Math.floor(GAME_H * scale * dpr);
     canvas.style.width = `${GAME_W * scale}px`;
     canvas.style.height = `${GAME_H * scale}px`;
     c.setTransform(scale * dpr, 0, 0, scale * dpr, 0, 0);
+
+    // rounded rect helper
+    function rr(x: number, y: number, w: number, h: number, r: number) {
+      const rad = Math.max(0, Math.min(r, Math.min(w, h) / 2));
+      c.beginPath();
+      c.moveTo(x + rad, y);
+      c.arcTo(x + w, y, x + w, y + h, rad);
+      c.arcTo(x + w, y + h, x, y + h, rad);
+      c.arcTo(x, y + h, x, y, rad);
+      c.arcTo(x, y, x + w, y, rad);
+      c.closePath();
+    }
+
+    // build noise pattern once per session/scale change
+    function ensureNoisePattern() {
+      if (noisePatternRef.current && noiseSeedRef.current === dpr) return;
+
+      const off = document.createElement("canvas");
+      const size = 96 * dpr;
+      off.width = size;
+      off.height = size;
+      const oc = off.getContext("2d");
+      if (!oc) return;
+
+      const img = oc.createImageData(size, size);
+      // deterministic-ish but fine
+      const seed = hashStringToSeed(`${dailyIdRef.current}-${userKeyRef.current}-noise`);
+      const rand = mulberry32(seed);
+      for (let i = 0; i < img.data.length; i += 4) {
+        const v = Math.floor(rand() * 255);
+        img.data[i] = v;
+        img.data[i + 1] = v;
+        img.data[i + 2] = v;
+        img.data[i + 3] = 255;
+      }
+      oc.putImageData(img, 0, 0);
+
+      const pat = c.createPattern(off, "repeat");
+      noisePatternRef.current = pat;
+      noiseSeedRef.current = dpr;
+    }
 
     function stepParticles(dt: number) {
       const parts = particlesRef.current;
@@ -915,23 +966,55 @@ export default function BrickBreakerMiniApp() {
     }
 
     function drawBrick(br: Brick, shimmer: number) {
-      const base = br.hp >= 2 ? "rgba(120, 200, 255, 0.95)" : "rgba(80, 170, 255, 0.90)";
-      c.fillStyle = base;
+      const r = 5;
 
-      // slightly rounded-ish feel (fake by drawing inset)
-      c.fillRect(br.x, br.y, br.w, br.h);
-
-      c.fillStyle = "rgba(255,255,255,0.16)";
-      c.fillRect(br.x, br.y, br.w, 3);
-
+      // base gradient (glass-ish)
+      const g = c.createLinearGradient(br.x, br.y, br.x, br.y + br.h);
       if (br.hp >= 2) {
-        const sweepX = br.x + ((shimmer % 1) * (br.w + 20)) - 20;
-        c.fillStyle = "rgba(255,255,255,0.10)";
-        c.fillRect(sweepX, br.y, 14, br.h);
+        g.addColorStop(0, "rgba(150, 230, 255, 0.95)");
+        g.addColorStop(1, "rgba(80, 175, 255, 0.92)");
+      } else {
+        g.addColorStop(0, "rgba(120, 205, 255, 0.92)");
+        g.addColorStop(1, "rgba(60, 150, 255, 0.88)");
       }
 
-      c.strokeStyle = "rgba(255,255,255,0.09)";
-      c.strokeRect(br.x + 0.5, br.y + 0.5, br.w - 1, br.h - 1);
+      rr(br.x, br.y, br.w, br.h, r);
+      c.fillStyle = g;
+      c.fill();
+
+      // inner highlight (top band)
+      rr(br.x + 1, br.y + 1, br.w - 2, Math.max(3, br.h * 0.35), r);
+      c.fillStyle = "rgba(255,255,255,0.14)";
+      c.fill();
+
+      // subtle inner gradient sweep
+      const inner = c.createLinearGradient(br.x, br.y, br.x + br.w, br.y + br.h);
+      inner.addColorStop(0, "rgba(255,255,255,0.08)");
+      inner.addColorStop(0.45, "rgba(255,255,255,0.00)");
+      inner.addColorStop(1, "rgba(0,0,0,0.10)");
+      rr(br.x + 1, br.y + 1, br.w - 2, br.h - 2, r - 1);
+      c.fillStyle = inner;
+      c.fill();
+
+      // shimmer for hp2 bricks
+      if (br.hp >= 2) {
+        const sweepX = br.x + ((shimmer % 1) * (br.w + 26)) - 26;
+        c.save();
+        rr(br.x + 1, br.y + 1, br.w - 2, br.h - 2, r - 1);
+        c.clip();
+        c.fillStyle = "rgba(255,255,255,0.10)";
+        c.fillRect(sweepX, br.y, 18, br.h);
+        c.restore();
+      }
+
+      // outer stroke + inner stroke
+      rr(br.x + 0.5, br.y + 0.5, br.w - 1, br.h - 1, r);
+      c.strokeStyle = "rgba(255,255,255,0.10)";
+      c.stroke();
+
+      rr(br.x + 1.5, br.y + 1.5, br.w - 3, br.h - 3, Math.max(0, r - 1));
+      c.strokeStyle = "rgba(0,0,0,0.12)";
+      c.stroke();
     }
 
     function drawDrop(d: Drop) {
@@ -941,14 +1024,14 @@ export default function BrickBreakerMiniApp() {
         d.type === "widen"
           ? "rgba(255,255,255,0.85)"
           : d.type === "slow"
-            ? "rgba(255, 209, 102, 0.90)"
+            ? "rgba(255, 209, 102, 0.92)"
             : "rgba(80,255,160,0.90)";
       c.fill();
 
       c.fillStyle = "rgba(0,0,0,0.55)";
-      c.font = "700 10px system-ui";
+      c.font = "800 10px system-ui";
       const t = d.type === "widen" ? "W" : d.type === "slow" ? "S" : "M";
-      c.fillText(t, d.x - 3.5, d.y + 3.5);
+      c.fillText(t, d.x - 3.6, d.y + 3.6);
     }
 
     function stepGame(dt: number) {
@@ -956,9 +1039,9 @@ export default function BrickBreakerMiniApp() {
 
       const now = performance.now();
       const widened = now < widenUntilRef.current;
-      p.w = widened ? 130 : 92;
+      p.w = widened ? 138 : 98;
 
-      const follow = pointerDownRef.current ? 0.32 : 0.22;
+      const follow = pointerDownRef.current ? 0.34 : 0.24;
       p.x = lerp(p.x, p.targetX, 1 - Math.pow(1 - follow, dt * 60));
       p.x = clamp(p.x, p.w / 2 + ui.wall, GAME_W - p.w / 2 - ui.wall);
 
@@ -967,7 +1050,7 @@ export default function BrickBreakerMiniApp() {
       if (!balls.some((b) => b.launched)) {
         for (const b of balls) {
           b.x = p.x;
-          b.y = p.y - 20;
+          b.y = p.y - 22;
         }
         return;
       }
@@ -1001,6 +1084,7 @@ export default function BrickBreakerMiniApp() {
 
         const paddleX = p.x - p.w / 2;
         const paddleY = p.y;
+
         if (b.vy > 0 && circleRectCollide(b.x, b.y, b.r, paddleX, paddleY, p.w, p.h)) {
           b.y = paddleY - b.r;
 
@@ -1062,15 +1146,48 @@ export default function BrickBreakerMiniApp() {
       }
     }
 
+    function drawBackground() {
+      // 1) deep gradient
+      const g = c.createLinearGradient(0, 0, 0, GAME_H);
+      g.addColorStop(0, "#0f1628");
+      g.addColorStop(0.45, "#0b1020");
+      g.addColorStop(1, "#070b14");
+      c.fillStyle = g;
+      c.fillRect(0, 0, GAME_W, GAME_H);
+
+      // 2) subtle vignette (radial dark edges)
+      const v = c.createRadialGradient(GAME_W / 2, GAME_H * 0.55, 60, GAME_W / 2, GAME_H * 0.55, GAME_W);
+      v.addColorStop(0, "rgba(0,0,0,0)");
+      v.addColorStop(1, "rgba(0,0,0,0.55)");
+      c.fillStyle = v;
+      c.fillRect(0, 0, GAME_W, GAME_H);
+
+      // 3) bottom glow (soft)
+      const b = c.createRadialGradient(GAME_W / 2, GAME_H * 1.05, 20, GAME_W / 2, GAME_H * 1.05, GAME_W * 0.9);
+      b.addColorStop(0, "rgba(255,255,255,0.08)");
+      b.addColorStop(1, "rgba(255,255,255,0)");
+      c.fillStyle = b;
+      c.fillRect(0, 0, GAME_W, GAME_H);
+
+      // 4) noise overlay
+      ensureNoisePattern();
+      const pat = noisePatternRef.current;
+      if (pat) {
+        c.save();
+        c.globalAlpha = 0.06;
+        c.fillStyle = pat;
+        c.fillRect(0, 0, GAME_W, GAME_H);
+        c.restore();
+      }
+    }
+
     function draw() {
       c.clearRect(0, 0, GAME_W, GAME_H);
 
-      // background
-      c.fillStyle = "#0b0f1a";
-      c.fillRect(0, 0, GAME_W, GAME_H);
+      drawBackground();
 
-      // top safe HUD strip (thin)
-      c.fillStyle = "rgba(255,255,255,0.04)";
+      // top HUD strip inside canvas (thin like reference)
+      c.fillStyle = "rgba(255,255,255,0.035)";
       c.fillRect(0, 0, GAME_W, ui.headerH);
 
       const shimmer = shimmerTRef.current;
@@ -1094,18 +1211,29 @@ export default function BrickBreakerMiniApp() {
 
       const p = paddleRef.current;
 
-      // paddle glow
-      c.fillStyle = "rgba(120, 200, 255, 0.18)";
-      c.fillRect(p.x - p.w / 2 - 6, p.y - 6, p.w + 12, p.h + 12);
+      // paddle glow (softer, wider)
+      c.save();
+      c.globalAlpha = 0.22;
+      rr(p.x - p.w / 2 - 10, p.y - 10, p.w + 20, p.h + 20, 12);
+      c.fillStyle = "rgba(120, 200, 255, 0.45)";
+      c.fill();
+      c.restore();
 
-      c.fillStyle = "rgba(255, 255, 255, 0.92)";
-      c.fillRect(p.x - p.w / 2, p.y, p.w, p.h);
+      // paddle body (rounded)
+      rr(p.x - p.w / 2, p.y, p.w, p.h, 10);
+      c.fillStyle = "rgba(255,255,255,0.92)";
+      c.fill();
+
+      // slight top highlight
+      rr(p.x - p.w / 2 + 1, p.y + 1, p.w - 2, Math.max(2, p.h * 0.35), 9);
+      c.fillStyle = "rgba(255,255,255,0.14)";
+      c.fill();
 
       for (const b of ballsRef.current) {
-        // ball halo
+        // ball halo (softer)
         c.beginPath();
-        c.arc(b.x, b.y, b.r + 5, 0, Math.PI * 2);
-        c.fillStyle = "rgba(255, 209, 102, 0.12)";
+        c.arc(b.x, b.y, b.r + 7, 0, Math.PI * 2);
+        c.fillStyle = "rgba(255, 209, 102, 0.10)";
         c.fill();
 
         c.beginPath();
@@ -1114,44 +1242,50 @@ export default function BrickBreakerMiniApp() {
         c.fill();
       }
 
+      // Centered text like reference
       if (gameState === "idle") {
-        c.fillStyle = "rgba(255,255,255,0.92)";
-        c.font = "700 18px system-ui";
-        c.fillText("Tap to launch", 110, 300);
-
-        c.fillStyle = "rgba(255,255,255,0.70)";
-        c.font = "600 13px system-ui";
-        if (practiceMode) c.fillText("Practice mode (no daily impact)", 78, 323);
+        c.save();
+        c.textAlign = "center";
+        c.fillStyle = "rgba(255,255,255,0.90)";
+        c.font = "800 18px system-ui";
+        c.fillText("Tap to launch", GAME_W / 2, GAME_H * 0.55);
+        c.restore();
       }
 
       if (gameState === "paused") {
+        c.save();
+        c.textAlign = "center";
         c.fillStyle = "rgba(255,255,255,0.92)";
-        c.font = "800 22px system-ui";
-        c.fillText("PAUSED", 135, 290);
-
+        c.font = "900 22px system-ui";
+        c.fillText("PAUSED", GAME_W / 2, GAME_H * 0.52);
         c.fillStyle = "rgba(255,255,255,0.70)";
-        c.font = "600 13px system-ui";
-        c.fillText("Tap canvas or press Resume", 86, 315);
+        c.font = "700 13px system-ui";
+        c.fillText("Tap to resume", GAME_W / 2, GAME_H * 0.56);
+        c.restore();
       }
 
       if (gameState === "gameover") {
+        c.save();
+        c.textAlign = "center";
         c.fillStyle = "rgba(255,80,80,0.95)";
-        c.font = "800 22px system-ui";
-        c.fillText("GAME OVER", 115, 290);
-
+        c.font = "900 22px system-ui";
+        c.fillText("GAME OVER", GAME_W / 2, GAME_H * 0.52);
         c.fillStyle = "rgba(255,255,255,0.70)";
-        c.font = "600 13px system-ui";
-        c.fillText("Press Restart to try again", 98, 315);
+        c.font = "700 13px system-ui";
+        c.fillText("Tap to restart", GAME_W / 2, GAME_H * 0.56);
+        c.restore();
       }
 
       if (gameState === "win") {
+        c.save();
+        c.textAlign = "center";
         c.fillStyle = "rgba(80,255,160,0.95)";
-        c.font = "800 22px system-ui";
-        c.fillText("LEVEL CLEARED!", 92, 290);
-
+        c.font = "900 22px system-ui";
+        c.fillText("LEVEL CLEARED!", GAME_W / 2, GAME_H * 0.52);
         c.fillStyle = "rgba(255,255,255,0.70)";
-        c.font = "600 13px system-ui";
-        c.fillText("Tap to continue", 128, 315);
+        c.font = "700 13px system-ui";
+        c.fillText("Tap to continue", GAME_W / 2, GAME_H * 0.56);
+        c.restore();
       }
     }
 
@@ -1183,14 +1317,11 @@ export default function BrickBreakerMiniApp() {
     commitLeaderboardIfNeeded,
     gameState,
     haptic,
-    level,
-    lives,
     loseLifeOrBall,
     maybeUpdateDailyBest,
     practiceInfiniteLives,
     practiceMode,
     resetBallsToPaddle,
-    score,
     scale,
     spawnDropMaybe,
     spawnWinParticles,
@@ -1207,51 +1338,52 @@ export default function BrickBreakerMiniApp() {
   const myAddr = (userAddr || "").toLowerCase().trim();
   const myName = shortAddr(myAddr || userKeyRef.current);
 
-  const topLine = (
-    <div className="flex items-center gap-3 text-[12px] text-white/80 font-semibold">
-      <div className="flex items-center gap-2">
-        <span className="text-white/70">📅</span>
-        <span>{prettyDate}</span>
-      </div>
-      <div className="flex items-center gap-2">
-        <span>🔥</span>
-        <span>Streak: {streak}</span>
-      </div>
-      <div className="flex items-center gap-2">
-        <span>🏆</span>
-        <span>Best: {todayBest}</span>
-      </div>
-    </div>
-  );
-
-  const secondLine = (
-    <div className="mt-2 flex items-center gap-6 text-[16px] font-extrabold tracking-tight">
-      <div className="flex items-center gap-2">
-        <span className="text-white/70 text-sm font-semibold">Score:</span>
-        <span className="tabular-nums">{score}</span>
-      </div>
-
-      <div className="flex items-center gap-2">
-        <span className="text-white/70 text-sm font-semibold">❤️</span>
-        <span className="tabular-nums">{practiceMode && practiceInfiniteLives ? "∞" : lives}</span>
-      </div>
-
-      <div className="flex items-center gap-2">
-        <span className="text-white/70 text-sm font-semibold">△</span>
-        <span className="tabular-nums">{level}</span>
-      </div>
-    </div>
-  );
-
   return (
-    <div ref={containerRef} className="min-h-[100dvh] bg-black text-white w-full max-w-[520px] mx-auto">
-      {/* TOP HUD (modern) */}
-      <div className="px-4 pt-4">
-        <div className="rounded-3xl border border-white/10 bg-white/[0.06] backdrop-blur-xl shadow-[0_0_0_1px_rgba(255,255,255,0.03)] px-4 py-3">
+    <div
+      ref={containerRef}
+      className="min-h-[100dvh] w-full bg-black text-white overflow-hidden"
+      style={{
+        // page background (outside canvas) – subtle like reference
+        background:
+          "radial-gradient(1000px 700px at 50% 40%, rgba(255,255,255,0.06), rgba(0,0,0,0) 55%), linear-gradient(180deg, #070b14 0%, #000000 100%)",
+      }}
+    >
+      {/* TOP HUD (more compact, reference-ish) */}
+      <div className="px-3 pt-3">
+        <div className="rounded-3xl border border-white/10 bg-white/[0.05] backdrop-blur-xl shadow-[0_0_0_1px_rgba(255,255,255,0.02)] px-4 py-3">
           <div className="flex items-start gap-3">
             <div className="flex-1">
-              {topLine}
-              {secondLine}
+              <div className="flex items-center gap-3 text-[12px] text-white/80 font-semibold">
+                <div className="flex items-center gap-2">
+                  <span className="text-white/70">📅</span>
+                  <span>{prettyDate}</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span>🔥</span>
+                  <span>Streak: {streak}</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span>🏆</span>
+                  <span>Best: {todayBest}</span>
+                </div>
+              </div>
+
+              <div className="mt-2 flex items-center justify-between text-[16px] font-extrabold tracking-tight">
+                <div className="flex items-center gap-2">
+                  <span className="text-white/70 text-sm font-semibold">Score</span>
+                  <span className="tabular-nums">{score}</span>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <span className="text-white/70 text-sm font-semibold">❤️</span>
+                  <span className="tabular-nums">{practiceMode && practiceInfiniteLives ? "∞" : lives}</span>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <span className="text-white/70 text-sm font-semibold">△</span>
+                  <span className="tabular-nums">{level}</span>
+                </div>
+              </div>
             </div>
 
             <button
@@ -1266,16 +1398,19 @@ export default function BrickBreakerMiniApp() {
         </div>
       </div>
 
-      {/* GAME AREA */}
-      <div className="px-4 pt-3 pb-24">
-        <div className="rounded-[28px] overflow-hidden border border-white/10 bg-white/[0.04] shadow-[0_0_0_1px_rgba(255,255,255,0.03)]">
+      {/* GAME AREA (bigger, minimal padding) */}
+      <div className="px-3 pt-2 pb-24">
+        <div
+          ref={gameCardRef}
+          className="rounded-[30px] overflow-hidden border border-white/10 bg-white/[0.03] shadow-[0_0_0_1px_rgba(255,255,255,0.02)]"
+        >
           <canvas ref={canvasRef} className="block touch-none select-none" />
         </div>
       </div>
 
-      {/* FLOATING SETTINGS (top-right, like your reference) */}
-      <div className="pointer-events-none fixed top-24 right-4 z-30">
-        <div className="pointer-events-auto w-[190px] rounded-3xl border border-white/10 bg-white/[0.06] backdrop-blur-xl shadow-xl overflow-hidden">
+      {/* FLOATING SETTINGS (top-right, closer to ref) */}
+      <div className="pointer-events-none fixed top-4 right-3 z-30">
+        <div className="pointer-events-auto w-[205px] rounded-3xl border border-white/10 bg-white/[0.05] backdrop-blur-xl shadow-xl overflow-hidden">
           <div className="px-4 py-3 text-[12px] text-white/90 font-semibold border-b border-white/10">Settings</div>
 
           <div className="p-3 space-y-2 text-[13px]">
@@ -1383,9 +1518,9 @@ export default function BrickBreakerMiniApp() {
         </div>
       </div>
 
-      {/* BOTTOM CONTROL BAR (icons like your reference) */}
+      {/* BOTTOM CONTROL BAR (clean) */}
       <div className="pointer-events-none fixed bottom-4 left-0 right-0 z-40 flex justify-center">
-        <div className="pointer-events-auto w-[320px] rounded-3xl border border-white/10 bg-white/[0.06] backdrop-blur-xl shadow-xl px-5 py-3 flex items-center justify-between">
+        <div className="pointer-events-auto w-[320px] rounded-3xl border border-white/10 bg-white/[0.05] backdrop-blur-xl shadow-xl px-5 py-3 flex items-center justify-between">
           <IconButton
             label={gameState === "running" ? "Pause" : gameState === "paused" ? "Resume" : gameState === "idle" ? "Start" : "Continue"}
             onClick={() => {
@@ -1396,8 +1531,8 @@ export default function BrickBreakerMiniApp() {
               if (gameState === "win") return nextLevelFn();
             }}
           >
-            <span className="text-xl">
-              {gameState === "running" ? "⏸" : gameState === "paused" ? "▶️" : gameState === "idle" ? "▶️" : gameState === "win" ? "⏭️" : "↻"}
+            <span className="text-xl opacity-90">
+              {gameState === "running" ? "⏸" : gameState === "paused" ? "▶" : gameState === "idle" ? "▶" : gameState === "win" ? "⏭" : "↻"}
             </span>
           </IconButton>
 
@@ -1408,7 +1543,7 @@ export default function BrickBreakerMiniApp() {
               showToast("Reset 🔄", 900);
             }}
           >
-            <span className="text-xl">🔄</span>
+            <span className="text-xl opacity-90">↻</span>
           </IconButton>
 
           <IconButton
@@ -1417,7 +1552,7 @@ export default function BrickBreakerMiniApp() {
               void shareScore();
             }}
           >
-            <span className="text-xl">📤</span>
+            <span className="text-xl opacity-90">⤴</span>
           </IconButton>
         </div>
       </div>
@@ -1425,7 +1560,7 @@ export default function BrickBreakerMiniApp() {
       {/* LEADERBOARD MODAL */}
       {lbOpen && (
         <div className="fixed inset-0 z-50 bg-black/70 flex items-end sm:items-center justify-center p-3">
-          <div className="w-full max-w-[520px] rounded-3xl border border-white/10 bg-[#0b0f1a] shadow-xl overflow-hidden">
+          <div className="w-full max-w-[520px] rounded-3xl border border-white/10 bg-[#070b14] shadow-xl overflow-hidden">
             <div className="p-4 flex items-center gap-2 border-b border-white/10">
               <div className="font-extrabold">🏆 Daily Leaderboard</div>
               <div className="ml-auto text-xs text-white/60">{dailyId}</div>
