@@ -163,8 +163,9 @@ export default function BrickBreakerMiniApp() {
   const [todayBest, setTodayBest] = useState<number>(0);
   const [streak, setStreak] = useState<number>(0);
 
-  // --- Attempts (UNLIMITED UI)
-  const attemptsLeft = Infinity;
+  // --- Daily Attempts (Daily mode only)
+  const DAILY_ATTEMPTS = 3;
+  const [attemptsLeft, setAttemptsLeft] = useState<number>(DAILY_ATTEMPTS);
 
   // --- Preferences
   const [soundOn, setSoundOn] = useState<boolean>(false);
@@ -271,7 +272,9 @@ export default function BrickBreakerMiniApp() {
 
   // Resolve user (MiniKit-ish)
   useEffect(() => {
-    const mk = (globalThis as unknown as { miniKit?: { user?: { address?: string }; context?: { user?: { address?: string } } } }).miniKit;
+    const mk = (globalThis as unknown as {
+      miniKit?: { user?: { address?: string }; context?: { user?: { address?: string } } };
+    }).miniKit;
     const addr = mk?.user?.address ?? mk?.context?.user?.address;
     const normalized = (addr || "").toLowerCase().trim();
     setUserAddr(normalized);
@@ -286,6 +289,7 @@ export default function BrickBreakerMiniApp() {
   const keyStreakCount = useCallback(() => `bb_${userKeyRef.current}_streak_count`, []);
   const keyPrefs = useCallback(() => `bb_${userKeyRef.current}_prefs`, []);
   const keyLeaderboard = useCallback(() => `bb_lb_${dailyIdRef.current}`, []);
+  const keyAttempts = useCallback(() => `bb_${userKeyRef.current}_attempts_${dailyIdRef.current}`, []);
 
   // scale
   useEffect(() => {
@@ -311,7 +315,7 @@ export default function BrickBreakerMiniApp() {
     function onDown(e: PointerEvent) {
       const t = e.target as HTMLElement | null;
       if (!t) return;
-      if (t.closest?.("[data-menu-root]")) return; // menünün içi ise kapatma
+      if (t.closest?.("[data-menu-root]")) return;
       setMenuOpen(false);
     }
     window.addEventListener("pointerdown", onDown);
@@ -329,11 +333,7 @@ export default function BrickBreakerMiniApp() {
     const from = accounts?.[0];
     if (!from) return null;
 
-    const signature = await eth.request<string>({
-      method: "personal_sign",
-      params: [message, from],
-    });
-
+    const signature = await eth.request<string>({ method: "personal_sign", params: [message, from] });
     if (!signature) return null;
     return { address: from.toLowerCase(), signature };
   }, []);
@@ -416,7 +416,6 @@ export default function BrickBreakerMiniApp() {
     },
     [dailyId, practiceMode, randomNonce, signMessageCompat]
   );
-  // ---------------------------------------------------------------------------
 
   // prefs load/save
   useEffect(() => {
@@ -434,6 +433,25 @@ export default function BrickBreakerMiniApp() {
       localStorage.setItem(keyPrefs(), JSON.stringify({ soundOn, hapticsOn }));
     } catch {}
   }, [soundOn, hapticsOn, userKey, keyPrefs]);
+
+  // ✅ Attempts load (daily mode)
+  useEffect(() => {
+    if (practiceMode) return;
+
+    const raw = localStorage.getItem(keyAttempts());
+    const n = raw ? Number(raw) : DAILY_ATTEMPTS;
+
+    const safe = Number.isFinite(n) ? n : DAILY_ATTEMPTS;
+    setAttemptsLeft(clamp(safe, 0, DAILY_ATTEMPTS));
+  }, [dailyId, userKey, practiceMode, keyAttempts]);
+
+  // ✅ Attempts save (daily mode)
+  useEffect(() => {
+    if (practiceMode) return;
+    try {
+      localStorage.setItem(keyAttempts(), String(attemptsLeft));
+    } catch {}
+  }, [attemptsLeft, practiceMode, keyAttempts]);
 
   // leaderboard load (local)
   useEffect(() => {
@@ -583,13 +601,26 @@ export default function BrickBreakerMiniApp() {
     [practiceMode, todayBest, keyDailyBest]
   );
 
+  // ✅ Speed increases per level
   const baseBallSpeed = useCallback(() => {
     const now = performance.now();
     const slow = now < slowUntilRef.current;
-    return slow ? 190 : 245;
+
+    const base = slow ? 190 : 245;
+
+    const lvl = Math.max(1, levelRef.current);
+    const mult = 1 + (lvl - 1) * 0.06; // 6% faster per level
+
+    return base * mult;
   }, []);
 
   const launchBalls = useCallback(() => {
+    // ✅ Block start when attempts are finished (Daily only)
+    if (!practiceMode && attemptsLeft <= 0) {
+      showToast("No attempts left today ⛔", 1400);
+      return;
+    }
+
     ensureAudio();
 
     const balls = ballsRef.current;
@@ -611,7 +642,7 @@ export default function BrickBreakerMiniApp() {
     setGameState("running");
     haptic(15);
     beep(420, 50, 0.03);
-  }, [baseBallSpeed, beep, ensureAudio, haptic]);
+  }, [attemptsLeft, baseBallSpeed, beep, ensureAudio, haptic, practiceMode, showToast]);
 
   const nextLevelFn = useCallback(() => {
     setLevel((prev) => {
@@ -665,10 +696,8 @@ export default function BrickBreakerMiniApp() {
         t: Date.now(),
       };
 
-      // local
       saveLeaderboard(entry);
 
-      // remote (best-effort)
       submitRemoteScore(finalScore, finalLevel)
         .then(() => fetchRemoteLeaderboard(dailyId).catch(() => {}))
         .catch(() => {});
@@ -744,7 +773,8 @@ export default function BrickBreakerMiniApp() {
           showToast("🎁 Multiball (max)", 900);
           return;
         }
-        const base = balls[0] ?? { x: paddleRef.current.x, y: paddleRef.current.y - 22, r: 7, vx: 0, vy: 0, launched: false };
+        const base =
+          balls[0] ?? { x: paddleRef.current.x, y: paddleRef.current.y - 22, r: 7, vx: 0, vy: 0, launched: false };
         const speed = baseBallSpeed();
 
         const mkBall = (dir: number): Ball => ({
@@ -779,12 +809,14 @@ export default function BrickBreakerMiniApp() {
             ? `⏸ Paused`
             : `🎮 In progress`;
 
+    const attemptsLine = practiceMode ? `Attempts: ∞` : `Attempts left: ${attemptsLeft}/${DAILY_ATTEMPTS}`;
+
     const text =
       `🧱 Brick Breaker (${dailyId})\n` +
       `${modeLine}\n` +
       `${statusLine}\n` +
       `Score: ${score} • Best: ${todayBest} • Streak: ${streak}🔥 • Level: ${level}\n` +
-      `Attempts: ∞\n` +
+      `${attemptsLine}\n` +
       `Play: ${url}\n` +
       `#Base #Onchain #MiniApp`;
 
@@ -827,6 +859,7 @@ export default function BrickBreakerMiniApp() {
       p.targetX = clamp(gx, p.w / 2 + ui.wall, GAME_W - p.w / 2 - ui.wall);
 
       const gs = gameStateRef.current;
+
       if (gs === "idle") launchBalls();
       else if (gs === "paused") {
         setGameState("running");
@@ -863,14 +896,17 @@ export default function BrickBreakerMiniApp() {
     };
   }, [beep, haptic, launchBalls, nextLevelFn, resetGame, scale, ui.wall]);
 
-  // Commit leaderboard on gameover once (daily only)
+  // Commit leaderboard + consume attempt on gameover (daily only)
   const lastCommittedStateRef = useRef<GameState>("idle");
   useEffect(() => {
     const prev = lastCommittedStateRef.current;
     lastCommittedStateRef.current = gameState;
+
     if (practiceMode) return;
+
     if (gameState === "gameover" && prev !== "gameover") {
       commitLeaderboardIfNeeded("gameover");
+      setAttemptsLeft((a) => Math.max(0, a - 1));
     }
   }, [commitLeaderboardIfNeeded, gameState, practiceMode]);
 
@@ -1183,6 +1219,24 @@ export default function BrickBreakerMiniApp() {
         c.fill();
       }
 
+      // ✅ Attempt 0 overlay
+      if (!practiceMode && attemptsLeft <= 0 && gameState !== "running") {
+        c.save();
+        c.textAlign = "center";
+        c.fillStyle = "rgba(0,0,0,0.55)";
+        c.fillRect(0, 0, GAME_W, GAME_H);
+
+        c.fillStyle = "rgba(255,255,255,0.95)";
+        c.font = "900 22px system-ui";
+        c.fillText("Come back tomorrow", GAME_W / 2, GAME_H * 0.50);
+
+        c.fillStyle = "rgba(255,255,255,0.65)";
+        c.font = "700 13px system-ui";
+        c.fillText("Daily attempts are finished", GAME_W / 2, GAME_H * 0.50 + 24);
+        c.restore();
+        return;
+      }
+
       if (gameState === "idle") {
         c.save();
         c.textAlign = "center";
@@ -1253,6 +1307,7 @@ export default function BrickBreakerMiniApp() {
     };
   }, [
     applyPowerUp,
+    attemptsLeft,
     beep,
     commitLeaderboardIfNeeded,
     gameState,
@@ -1291,9 +1346,7 @@ export default function BrickBreakerMiniApp() {
       <div className="px-3 pt-3">
         <div className="rounded-3xl border border-white/10 bg-white/[0.05] backdrop-blur-xl shadow-[0_0_0_1px_rgba(255,255,255,0.02)] px-4 py-3">
           <div className="flex items-start gap-3">
-            {/* ✅ min-w-0: satırın kırılmasını/taşmasını düzgün yapar */}
             <div className="flex-1 min-w-0">
-              {/* ✅ ÜST SATIR: TEK SATIR, TAŞARSA YANA KAYAR */}
               <div className="flex flex-row flex-nowrap items-center gap-3 overflow-x-auto whitespace-nowrap no-scrollbar text-[12px] text-white/80 font-semibold w-full">
                 <div className="flex items-center gap-2 min-w-max shrink-0 whitespace-nowrap">
                   <span className="text-white/70">📅</span>
@@ -1309,6 +1362,15 @@ export default function BrickBreakerMiniApp() {
                   <span>🏆</span>
                   <span>Best: {todayBest}</span>
                 </div>
+
+                {!practiceMode && (
+                  <div className="flex items-center gap-2 min-w-max shrink-0 whitespace-nowrap">
+                    <span>🎟</span>
+                    <span>
+                      Attempts: {attemptsLeft}/{DAILY_ATTEMPTS}
+                    </span>
+                  </div>
+                )}
               </div>
 
               <div className="mt-2 flex items-center justify-between text-[16px] font-extrabold tracking-tight">
@@ -1388,10 +1450,10 @@ export default function BrickBreakerMiniApp() {
 
                     <div className="w-full flex items-center justify-between px-3 py-2 rounded-2xl bg-white/5 border border-white/10">
                       <span className="flex items-center gap-2">
-                        <span>∞</span>
+                        <span>🎟</span>
                         <span className="text-white/80">Attempts</span>
                       </span>
-                      <span className="font-extrabold text-white/90">{attemptsLeft === Infinity ? "∞" : String(attemptsLeft)}</span>
+                      <span className="font-extrabold text-white/90">{practiceMode ? "∞" : `${attemptsLeft}/${DAILY_ATTEMPTS}`}</span>
                     </div>
 
                     <button
@@ -1404,6 +1466,8 @@ export default function BrickBreakerMiniApp() {
                           beep(next ? 500 : 700, 40, 0.02);
 
                           setPracticeInfiniteLives(false);
+
+                          // Reset game session when switching mode
                           setScore(0);
                           setLives(3);
                           setLevel(1);
@@ -1412,6 +1476,8 @@ export default function BrickBreakerMiniApp() {
                           setGameState("idle");
                           particlesRef.current = [];
                           lastCommitKeyRef.current = "";
+
+                          // When switching BACK to daily, attempts will load from storage
                           return next;
                         });
                       }}
@@ -1464,7 +1530,6 @@ export default function BrickBreakerMiniApp() {
                 </div>
               )}
             </div>
-
           </div>
         </div>
       </div>
