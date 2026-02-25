@@ -100,38 +100,6 @@ function formatDailyIdToPretty(dailyId: string) {
   }
 }
 
-function IconButton({
-  label,
-  onClick,
-  disabled,
-  children,
-}: {
-  label: string;
-  onClick: () => void;
-  disabled?: boolean;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      aria-label={label}
-      onClick={onClick}
-      disabled={disabled}
-      className={[
-        "pointer-events-auto select-none",
-        "h-12 w-12 rounded-2xl",
-        "bg-white/10 border border-white/15",
-        "backdrop-blur-md",
-        "active:scale-[0.98]",
-        "disabled:opacity-40 disabled:active:scale-100",
-        "flex items-center justify-center",
-      ].join(" ")}
-    >
-      {children}
-    </button>
-  );
-}
-
 export default function BrickBreakerMiniApp() {
   const { composeCast } = useComposeCast();
 
