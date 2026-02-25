@@ -5,15 +5,33 @@ import { base } from "wagmi/chains";
 import { OnchainKitProvider } from "@coinbase/onchainkit";
 import "@coinbase/onchainkit/styles.css";
 
+type MiniKitLike = {
+  ready?: () => void;
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
 export function RootProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     (async () => {
       try {
-        const mod: any = await import("@coinbase/onchainkit/minikit");
-        const mk = mod?.MiniKit ?? mod?.default ?? mod;
+        const modUnknown: unknown = await import("@coinbase/onchainkit/minikit");
+
+        let mk: MiniKitLike | null = null;
+
+        if (isRecord(modUnknown)) {
+          const maybeNamed = modUnknown["MiniKit"];
+          const maybeDefault = modUnknown["default"];
+
+          if (isRecord(maybeNamed)) mk = maybeNamed as MiniKitLike;
+          else if (isRecord(maybeDefault)) mk = maybeDefault as MiniKitLike;
+          else mk = modUnknown as MiniKitLike;
+        }
+
         mk?.ready?.();
       } catch (e) {
-        // Sessiz geç: ready çağrısı sadece Base Mini App preview/host içinde gerekir
         console.warn("MiniKit ready failed:", e);
       }
     })();
