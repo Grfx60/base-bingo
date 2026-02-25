@@ -1576,42 +1576,90 @@ export default function BrickBreakerMiniApp() {
         </div>
       </div>
 
-      {/* BOTTOM CONTROL BAR */}
-      <div className="pointer-events-none fixed bottom-4 left-0 right-0 z-40 flex justify-center">
-        <div className="pointer-events-auto w-[320px] rounded-3xl border border-white/10 bg-white/[0.05] backdrop-blur-xl shadow-xl px-5 py-3 flex items-center justify-between">
-          <IconButton
-            label={gameState === "running" ? "Pause" : gameState === "paused" ? "Resume" : gameState === "idle" ? "Start" : "Continue"}
-            onClick={() => {
-              if (dailyLocked) return showToast("Come back tomorrow ⏳", 1200);
+     {/* BOTTOM CONTROL BAR */}
+<div className="pointer-events-none fixed bottom-4 left-0 right-0 z-40 flex justify-center px-3">
+  <div className="pointer-events-auto w-full max-w-[520px] rounded-3xl border border-white/10 bg-white/[0.06] backdrop-blur-xl shadow-xl px-4 py-3">
+    <div className="grid grid-cols-3 items-center gap-3">
+      {/* LEFT: PLAY / PAUSE / RESUME / CONTINUE */}
+      <button
+        type="button"
+        onClick={() => {
+          if (dailyLocked) return showToast("Come back tomorrow ⏳", 1200);
 
-              if (gameState === "idle") return launchBalls();
-              if (gameState === "running") return setGameState("paused");
-              if (gameState === "paused") return setGameState("running");
-              if (gameState === "gameover") return resetGame(1);
-              if (gameState === "win") return nextLevelFn();
-            }}
-          >
-            <span className="text-xl opacity-90">
-              {gameState === "running" ? "⏸" : gameState === "paused" ? "▶" : gameState === "idle" ? "▶" : gameState === "win" ? "⏭" : "↻"}
-            </span>
-          </IconButton>
+          if (gameState === "idle") return launchBalls();
+          if (gameState === "running") return setGameState("paused");
+          if (gameState === "paused") return setGameState("running");
+          if (gameState === "gameover") return resetGame(1);
+          if (gameState === "win") return nextLevelFn();
+        }}
+        className={[
+          "h-14 w-full rounded-2xl",
+          "bg-white/10 border border-white/15",
+          "backdrop-blur-md shadow",
+          "active:scale-[0.99]",
+          "disabled:opacity-40 disabled:active:scale-100",
+          "flex items-center justify-center gap-2",
+          "text-[15px] font-extrabold text-white/95",
+        ].join(" ")}
+      >
+        <span className="text-xl">
+          {gameState === "running" ? "⏸" : gameState === "paused" ? "▶" : gameState === "idle" ? "▶" : gameState === "win" ? "⏭" : "↻"}
+        </span>
+        <span>
+          {gameState === "running"
+            ? "Pause"
+            : gameState === "paused"
+              ? "Resume"
+              : gameState === "idle"
+                ? "Play"
+                : gameState === "win"
+                  ? "Next"
+                  : "Continue"}
+        </span>
+      </button>
 
-          <IconButton
-            label="Reset"
-            onClick={() => {
-              if (dailyLocked) return showToast("Come back tomorrow ⏳", 1200);
-              resetGame(1);
-              showToast("Reset 🔄", 900);
-            }}
-          >
-            <span className="text-xl opacity-90">↻</span>
-          </IconButton>
+      {/* CENTER: RESTART */}
+      <button
+        type="button"
+        onClick={() => {
+          if (dailyLocked) return showToast("Come back tomorrow ⏳", 1200);
+          resetGame(1);
+          showToast("Restart 🔄", 900);
+        }}
+        className={[
+          "h-14 w-full rounded-2xl",
+          "bg-white/10 border border-white/15",
+          "backdrop-blur-md shadow",
+          "active:scale-[0.99]",
+          "disabled:opacity-40 disabled:active:scale-100",
+          "flex items-center justify-center gap-2",
+          "text-[15px] font-extrabold text-white/95",
+        ].join(" ")}
+      >
+        <span className="text-xl">↻</span>
+        <span>Restart</span>
+      </button>
 
-          <IconButton label="Share" onClick={shareScore}>
-            <span className="text-xl opacity-90">⤴</span>
-          </IconButton>
-        </div>
-      </div>
+      {/* RIGHT: SHARE */}
+      <button
+        type="button"
+        onClick={shareScore}
+        className={[
+          "h-14 w-full rounded-2xl",
+          "bg-white/10 border border-white/15",
+          "backdrop-blur-md shadow",
+          "active:scale-[0.99]",
+          "disabled:opacity-40 disabled:active:scale-100",
+          "flex items-center justify-center gap-2",
+          "text-[15px] font-extrabold text-white/95",
+        ].join(" ")}
+      >
+        <span className="text-xl">⤴</span>
+        <span>Share</span>
+      </button>
+    </div>
+  </div>
+</div>
 
       {/* LEADERBOARD MODAL */}
       {lbOpen && (
