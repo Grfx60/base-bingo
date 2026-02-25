@@ -1,10 +1,9 @@
 {
   "accountAssociation": {
-     "header": "eyJmaWQiOjUyMjg1NiwidHlwZSI6ImN1c3RvZHkiLCJrZXkiOiIweDczODU1MDE3ZDU5MzhkNjNENjkyNjJiOTFDZDk3NkI1RWZGZGRhMUQifQ",
+    "header": "eyJmaWQiOjUyMjg1NiwidHlwZSI6ImN1c3RvZHkiLCJrZXkiOiIweDczODU1MDE3ZDU5MzhkNjNENjkyNjJiOTFDZDk3NkI1RWZGZGRhMUQifQ",
     "payload": "eyJkb21haW4iOiJiYXNlLWJpbmdvLXJoby52ZXJjZWwuYXBwIn0",
     "signature": "Eh5hPcK3/z4H3RhCwJO4m2UkWmUnYU2gr0SFn/MH46kCLotDYtLei8wi1Hbvk2fDVEFJSpEKsv2nOdmHATrjahs="
   },
-
   "miniapp": {
     "version": "1",
     "name": "Base Bingo",
@@ -14,11 +13,10 @@
     "homeUrl": "https://base-bingo-rho.vercel.app",
     "webhookUrl": "https://base-bingo-rho.vercel.app/api/webhook",
     "primaryCategory": "utility",
-    "tags": ["bingo", "daily", "streak", "base", "utility"],
+    "tags": ["bingo","daily","streak","base","utility"],
     "heroImageUrl": "https://base-bingo-rho.vercel.app/hero.png",
     "ogImageUrl": "https://base-bingo-rho.vercel.app/hero.png"
   },
-
   "baseBuilder": {
     "ownerAddress": "0xBe96fB12585Bd1cd2822Ae451A69eA5E8970806F"
   }
