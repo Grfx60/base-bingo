@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useComposeCast } from "@coinbase/onchainkit/minikit";
 
 type GameState = "idle" | "running" | "paused" | "gameover" | "win";
 type Brick = { x: number; y: number; w: number; h: number; alive: boolean; hp: number };
@@ -132,6 +133,8 @@ function IconButton({
 }
 
 export default function BrickBreakerMiniApp() {
+  const { composeCast } = useComposeCast();
+
   // --- Daily id
   const [dailyId] = useState(() => dateKey(new Date()));
   const dailyIdRef = useRef(dailyId);
@@ -220,7 +223,6 @@ export default function BrickBreakerMiniApp() {
   const noiseSeedRef = useRef<number>(0);
 
   const ui = useMemo(() => ({ headerH: 46, wall: 10, brickGap: 6 }), []);
-
   const dailyLocked = !practiceMode && attemptsLeft <= 0;
 
   // --- Audio
@@ -368,17 +370,21 @@ export default function BrickBreakerMiniApp() {
         if (!isRecord(e)) return null;
 
         const scoreN = Number(e.score);
-        const levelN = Number(e.level ?? e.lvl);
-        const address = typeof e.address === "string" ? e.address.toLowerCase() : "";
-        const name = typeof e.name === "string" ? e.name : shortAddr(address);
+        const levelN = Number(e.level ?? (e as Record<string, unknown>).lvl);
+        const address = typeof (e as Record<string, unknown>).address === "string" ? String((e as Record<string, unknown>).address).toLowerCase() : "";
+        const name = typeof (e as Record<string, unknown>).name === "string" ? String((e as Record<string, unknown>).name) : shortAddr(address);
+
+        const tRaw = (e as Record<string, unknown>).t;
+        const createdAt = (e as Record<string, unknown>).createdAt;
+        const created_at = (e as Record<string, unknown>).created_at;
 
         const t =
-          typeof e.t === "number"
-            ? e.t
-            : typeof e.createdAt === "string"
-              ? Date.parse(e.createdAt)
-              : typeof e.created_at === "string"
-                ? Date.parse(e.created_at)
+          typeof tRaw === "number"
+            ? tRaw
+            : typeof createdAt === "string"
+              ? Date.parse(createdAt)
+              : typeof created_at === "string"
+                ? Date.parse(created_at)
                 : Date.now();
 
         if (!Number.isFinite(scoreN) || !Number.isFinite(levelN)) return null;
@@ -417,7 +423,7 @@ export default function BrickBreakerMiniApp() {
 
       const json = await safeJson(res);
       if (!res.ok) {
-        const err = isRecord(json) ? String(json.error ?? "submit failed") : "submit failed";
+        const err = isRecord(json) ? String((json as Record<string, unknown>).error ?? "submit failed") : "submit failed";
         throw new Error(err);
       }
     },
@@ -451,7 +457,7 @@ export default function BrickBreakerMiniApp() {
 
     setAttemptsLeft(clamp(safe, 0, DAILY_ATTEMPTS));
     runStartedRef.current = false; // güne başlarken/run değişince sıfırla
-  }, [dailyId, userKey]); // 👈 sadece bunlar
+  }, [dailyId, userKey, practiceMode, keyAttempts]); // safe deps
 
   // ✅ Attempts save (daily only)
   useEffect(() => {
@@ -611,17 +617,14 @@ export default function BrickBreakerMiniApp() {
   );
 
   // ✅ base speed + level scaling
-  const baseBallSpeed = useCallback(
-    () => {
-      const now = performance.now();
-      const slow = now < slowUntilRef.current;
+  const baseBallSpeed = useCallback(() => {
+    const now = performance.now();
+    const slow = now < slowUntilRef.current;
 
-      const base = slow ? 190 : 245;
-      const levelBoost = 1 + Math.max(0, levelRef.current - 1) * 0.06; // +%6 each level
-      return base * levelBoost;
-    },
-    []
-  );
+    const base = slow ? 190 : 245;
+    const levelBoost = 1 + Math.max(0, levelRef.current - 1) * 0.06; // +%6 each level
+    return base * levelBoost;
+  }, []);
 
   const launchBalls = useCallback(() => {
     if (!practiceMode && attemptsLeft <= 0) {
@@ -637,10 +640,7 @@ export default function BrickBreakerMiniApp() {
     // ✅ decrease attempt only once per run (daily mode)
     if (!practiceMode && !runStartedRef.current) {
       runStartedRef.current = true;
-      setAttemptsLeft((prev) => {
-        const next = Math.max(0, prev - 1);
-        return next;
-      });
+      setAttemptsLeft((prev) => Math.max(0, prev - 1));
     }
 
     const p = paddleRef.current;
@@ -794,7 +794,8 @@ export default function BrickBreakerMiniApp() {
           showToast("🎁 Multiball (max)", 900);
           return;
         }
-        const base = balls[0] ?? { x: paddleRef.current.x, y: paddleRef.current.y - 22, r: 7, vx: 0, vy: 0, launched: false };
+        const base =
+          balls[0] ?? { x: paddleRef.current.x, y: paddleRef.current.y - 22, r: 7, vx: 0, vy: 0, launched: false };
         const speed = baseBallSpeed();
 
         const mkBall = (dir: number): Ball => ({
@@ -815,7 +816,8 @@ export default function BrickBreakerMiniApp() {
     [baseBallSpeed, beep, haptic, showToast]
   );
 
-  async function shareScore() {
+  // ✅ SHARE (clean): composeCast -> navigator.share -> clipboard
+  const shareScore = useCallback(() => {
     const origin = typeof window !== "undefined" ? window.location.origin : "";
     const url = `${origin}/brick-breaker`;
 
@@ -840,24 +842,35 @@ export default function BrickBreakerMiniApp() {
       `Play: ${url}\n` +
       `#Base #Onchain #MiniApp`;
 
+    // 1) Warpcast composer (MiniKit)
+    try {
+      if (typeof composeCast === "function") {
+        composeCast({ text, embeds: [url] });
+        showToast("Opening cast… ✍️", 1000);
+        return;
+      }
+    } catch {}
+
+    // 2) Native share sheet
     try {
       if (typeof navigator !== "undefined" && "share" in navigator) {
         const shareFn = (navigator as Navigator & { share?: (data: { text?: string; url?: string }) => Promise<void> }).share;
         if (shareFn) {
-          await shareFn({ text, url });
-          showToast("Shared ✅", 1200);
+          void shareFn({ text, url });
+          showToast("Opening share… ⤴", 1000);
           return;
         }
       }
     } catch {}
 
+    // 3) Clipboard fallback
     try {
-      await navigator.clipboard.writeText(text);
+      void navigator.clipboard.writeText(text);
       showToast("Copied ✅", 1200);
     } catch {
-      showToast("Copy failed ❌", 1400);
+      showToast("Share failed ❌", 1400);
     }
-  }
+  }, [DAILY_ATTEMPTS, attemptsLeft, composeCast, dailyId, gameState, level, practiceMode, score, showToast, streak, todayBest]);
 
   // pointer controls (canvas)
   useEffect(() => {
@@ -891,7 +904,6 @@ export default function BrickBreakerMiniApp() {
         beep(360, 40, 0.02);
       } else if (gs === "win") nextLevelFn();
       else if (gs === "gameover") {
-        // attempt 0 ise restart yok
         if (!practiceMode && attemptsLeft <= 0) {
           showToast("Come back tomorrow ⏳", 1200);
           return;
@@ -934,7 +946,7 @@ export default function BrickBreakerMiniApp() {
     lastCommittedStateRef.current = gameState;
 
     if (gameState === "gameover" && prev !== "gameover") {
-      runStartedRef.current = false; // ✅ run bitti
+      runStartedRef.current = false;
     }
 
     if (practiceMode) return;
@@ -1473,7 +1485,9 @@ export default function BrickBreakerMiniApp() {
                         <span>{practiceMode ? "∞" : "🎯"}</span>
                         <span className="text-white/80">Attempts</span>
                       </span>
-                      <span className="font-extrabold text-white/90">{practiceMode ? "∞" : `${attemptsLeft}/${DAILY_ATTEMPTS}`}</span>
+                      <span className="font-extrabold text-white/90">
+                        {practiceMode ? "∞" : `${attemptsLeft}/${DAILY_ATTEMPTS}`}
+                      </span>
                     </div>
 
                     <button
@@ -1554,7 +1568,10 @@ export default function BrickBreakerMiniApp() {
 
       {/* GAME AREA */}
       <div className="px-3 pt-2 pb-24">
-        <div ref={gameCardRef} className="rounded-[30px] overflow-hidden border border-white/10 bg-white/[0.03] shadow-[0_0_0_1px_rgba(255,255,255,0.02)]">
+        <div
+          ref={gameCardRef}
+          className="rounded-[30px] overflow-hidden border border-white/10 bg-white/[0.03] shadow-[0_0_0_1px_rgba(255,255,255,0.02)]"
+        >
           <canvas ref={canvasRef} className="block touch-none select-none" />
         </div>
       </div>
@@ -1590,12 +1607,7 @@ export default function BrickBreakerMiniApp() {
             <span className="text-xl opacity-90">↻</span>
           </IconButton>
 
-          <IconButton
-            label="Share"
-            onClick={() => {
-              void shareScore();
-            }}
-          >
+          <IconButton label="Share" onClick={shareScore}>
             <span className="text-xl opacity-90">⤴</span>
           </IconButton>
         </div>
@@ -1640,7 +1652,7 @@ export default function BrickBreakerMiniApp() {
                   {boardToShow.map((e, idx) => {
                     const addr =
                       "address" in (e as RemoteLBEntry) && typeof (e as RemoteLBEntry).address === "string"
-                        ? ((e as RemoteLBEntry).address || "").toLowerCase()
+                        ? (((e as RemoteLBEntry).address || "").toLowerCase() as string)
                         : "";
 
                     const isMe =
