@@ -100,6 +100,41 @@ function formatDailyIdToPretty(dailyId: string) {
   }
 }
 
+function BottomBarButton({
+  title,
+  icon,
+  onClick,
+  disabled,
+}: {
+  title: string;
+  icon: React.ReactNode;
+  onClick: () => void;
+  disabled?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      className={[
+        "flex-1 min-w-0",
+        "rounded-3xl border border-white/12",
+        "bg-white/[0.08] backdrop-blur-xl",
+        "shadow-[0_10px_30px_rgba(0,0,0,0.35)]",
+        "px-3 py-2",
+        "active:scale-[0.99]",
+        "disabled:opacity-40 disabled:active:scale-100",
+        "flex flex-col items-center justify-center gap-1",
+        "select-none",
+      ].join(" ")}
+      aria-label={title}
+    >
+      <div className="text-[12px] font-extrabold tracking-tight text-white/90">{title}</div>
+      <div className="text-2xl leading-none opacity-90">{icon}</div>
+    </button>
+  );
+}
+
 export default function BrickBreakerMiniApp() {
   const { composeCast } = useComposeCast();
 
@@ -143,7 +178,6 @@ export default function BrickBreakerMiniApp() {
 
   // --- Preferences
   const [soundOn, setSoundOn] = useState<boolean>(false);
-  const [hapticsOn, setHapticsOn] = useState<boolean>(true);
 
   // --- Leaderboard (local + remote)
   const [lbOpen, setLbOpen] = useState(false);
@@ -191,6 +225,7 @@ export default function BrickBreakerMiniApp() {
   const noiseSeedRef = useRef<number>(0);
 
   const ui = useMemo(() => ({ headerH: 46, wall: 10, brickGap: 6 }), []);
+
   const dailyLocked = !practiceMode && attemptsLeft <= 0;
 
   // --- Audio
@@ -223,17 +258,6 @@ export default function BrickBreakerMiniApp() {
       } catch {}
     },
     [ensureAudio, soundOn]
-  );
-
-  const haptic = useCallback(
-    (ms: number) => {
-      if (!hapticsOn) return;
-      if (typeof navigator !== "undefined" && "vibrate" in navigator) {
-        const vib = (navigator as Navigator & { vibrate?: (pattern: number | number[]) => boolean }).vibrate;
-        vib?.(ms);
-      }
-    },
-    [hapticsOn]
   );
 
   const showToast = useCallback((msg: string, ms = 1400) => {
@@ -272,7 +296,7 @@ export default function BrickBreakerMiniApp() {
       if (!card || !root) return;
 
       const w = card.clientWidth;
-      const availableH = Math.max(420, root.clientHeight - 150);
+      const availableH = Math.max(420, root.clientHeight - 170);
       const sW = w / GAME_W;
       const sH = availableH / GAME_H;
       setScale(clamp(Math.min(sW, sH), 1.0, 2.2));
@@ -338,21 +362,17 @@ export default function BrickBreakerMiniApp() {
         if (!isRecord(e)) return null;
 
         const scoreN = Number(e.score);
-        const levelN = Number(e.level ?? (e as Record<string, unknown>).lvl);
-        const address = typeof (e as Record<string, unknown>).address === "string" ? String((e as Record<string, unknown>).address).toLowerCase() : "";
-        const name = typeof (e as Record<string, unknown>).name === "string" ? String((e as Record<string, unknown>).name) : shortAddr(address);
-
-        const tRaw = (e as Record<string, unknown>).t;
-        const createdAt = (e as Record<string, unknown>).createdAt;
-        const created_at = (e as Record<string, unknown>).created_at;
+        const levelN = Number(e.level ?? e.lvl);
+        const address = typeof e.address === "string" ? e.address.toLowerCase() : "";
+        const name = typeof e.name === "string" ? e.name : shortAddr(address);
 
         const t =
-          typeof tRaw === "number"
-            ? tRaw
-            : typeof createdAt === "string"
-              ? Date.parse(createdAt)
-              : typeof created_at === "string"
-                ? Date.parse(created_at)
+          typeof e.t === "number"
+            ? e.t
+            : typeof e.createdAt === "string"
+              ? Date.parse(e.createdAt)
+              : typeof e.created_at === "string"
+                ? Date.parse(e.created_at)
                 : Date.now();
 
         if (!Number.isFinite(scoreN) || !Number.isFinite(levelN)) return null;
@@ -391,7 +411,7 @@ export default function BrickBreakerMiniApp() {
 
       const json = await safeJson(res);
       if (!res.ok) {
-        const err = isRecord(json) ? String((json as Record<string, unknown>).error ?? "submit failed") : "submit failed";
+        const err = isRecord(json) ? String(json.error ?? "submit failed") : "submit failed";
         throw new Error(err);
       }
     },
@@ -403,17 +423,16 @@ export default function BrickBreakerMiniApp() {
     const raw = localStorage.getItem(keyPrefs());
     if (!raw) return;
     try {
-      const obj = JSON.parse(raw) as { soundOn?: boolean; hapticsOn?: boolean };
+      const obj = JSON.parse(raw) as { soundOn?: boolean };
       if (typeof obj.soundOn === "boolean") setSoundOn(obj.soundOn);
-      if (typeof obj.hapticsOn === "boolean") setHapticsOn(obj.hapticsOn);
     } catch {}
   }, [userKey, keyPrefs]);
 
   useEffect(() => {
     try {
-      localStorage.setItem(keyPrefs(), JSON.stringify({ soundOn, hapticsOn }));
+      localStorage.setItem(keyPrefs(), JSON.stringify({ soundOn }));
     } catch {}
-  }, [soundOn, hapticsOn, userKey, keyPrefs]);
+  }, [soundOn, userKey, keyPrefs]);
 
   // ✅ Attempts load (daily only) — IMPORTANT: practiceMode dependency yok
   useEffect(() => {
@@ -424,8 +443,8 @@ export default function BrickBreakerMiniApp() {
     const safe = Number.isFinite(n) ? n : DAILY_ATTEMPTS;
 
     setAttemptsLeft(clamp(safe, 0, DAILY_ATTEMPTS));
-    runStartedRef.current = false; // güne başlarken/run değişince sıfırla
-  }, [dailyId, userKey, practiceMode, keyAttempts]); // safe deps
+    runStartedRef.current = false;
+  }, [dailyId, userKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ✅ Attempts save (daily only)
   useEffect(() => {
@@ -560,7 +579,7 @@ export default function BrickBreakerMiniApp() {
       setGameState("idle");
       particlesRef.current = [];
       lastCommitKeyRef.current = "";
-      runStartedRef.current = false; // ✅ yeni run sayılır
+      runStartedRef.current = false;
     },
     [makeLevelBricks, resetRound]
   );
@@ -590,7 +609,7 @@ export default function BrickBreakerMiniApp() {
     const slow = now < slowUntilRef.current;
 
     const base = slow ? 190 : 245;
-    const levelBoost = 1 + Math.max(0, levelRef.current - 1) * 0.06; // +%6 each level
+    const levelBoost = 1 + Math.max(0, levelRef.current - 1) * 0.06;
     return base * levelBoost;
   }, []);
 
@@ -625,9 +644,8 @@ export default function BrickBreakerMiniApp() {
     }
 
     setGameState("running");
-    haptic(15);
     beep(420, 50, 0.03);
-  }, [attemptsLeft, baseBallSpeed, beep, ensureAudio, haptic, practiceMode, showToast]);
+  }, [attemptsLeft, baseBallSpeed, beep, ensureAudio, practiceMode, showToast]);
 
   const nextLevelFn = useCallback(() => {
     if (dailyLocked) {
@@ -703,7 +721,6 @@ export default function BrickBreakerMiniApp() {
 
       if (balls.length > 0) {
         beep(180, 50, 0.03);
-        haptic(15);
         return;
       }
 
@@ -711,7 +728,6 @@ export default function BrickBreakerMiniApp() {
         resetBallsToPaddle();
         setGameState("idle");
         beep(220, 60, 0.03);
-        haptic(20);
         return;
       }
 
@@ -725,9 +741,8 @@ export default function BrickBreakerMiniApp() {
 
       resetBallsToPaddle();
       beep(180, 80, 0.05);
-      haptic(40);
     },
-    [beep, haptic, maybeUpdateDailyBest, practiceInfiniteLives, practiceMode, resetBallsToPaddle]
+    [beep, maybeUpdateDailyBest, practiceInfiniteLives, practiceMode, resetBallsToPaddle]
   );
 
   const spawnDropMaybe = useCallback(
@@ -750,12 +765,10 @@ export default function BrickBreakerMiniApp() {
         widenUntilRef.current = now + 12000;
         showToast("🎁 Widen Paddle!", 900);
         beep(780, 40, 0.02);
-        haptic(20);
       } else if (type === "slow") {
         slowUntilRef.current = now + 9000;
         showToast("🎁 Slow Ball!", 900);
         beep(640, 40, 0.02);
-        haptic(20);
       } else if (type === "multiball") {
         const balls = ballsRef.current;
         if (balls.length >= 4) {
@@ -763,7 +776,8 @@ export default function BrickBreakerMiniApp() {
           return;
         }
         const base =
-          balls[0] ?? { x: paddleRef.current.x, y: paddleRef.current.y - 22, r: 7, vx: 0, vy: 0, launched: false };
+          balls[0] ??
+          ({ x: paddleRef.current.x, y: paddleRef.current.y - 22, r: 7, vx: 0, vy: 0, launched: false } as Ball);
         const speed = baseBallSpeed();
 
         const mkBall = (dir: number): Ball => ({
@@ -778,13 +792,11 @@ export default function BrickBreakerMiniApp() {
         balls.push(mkBall(1), mkBall(-1));
         showToast("🎁 Multi-ball!", 900);
         beep(920, 55, 0.02);
-        haptic(30);
       }
     },
-    [baseBallSpeed, beep, haptic, showToast]
+    [baseBallSpeed, beep, showToast]
   );
 
-  // ✅ SHARE (clean): composeCast -> navigator.share -> clipboard
   const shareScore = useCallback(() => {
     const origin = typeof window !== "undefined" ? window.location.origin : "";
     const url = `${origin}/brick-breaker`;
@@ -810,17 +822,20 @@ export default function BrickBreakerMiniApp() {
       `Play: ${url}\n` +
       `#Base #Onchain #MiniApp`;
 
-    // 1) Warpcast composer (MiniKit)
     try {
+      // ✅ 1) Warpcast compose (varsa en iyi)
       if (typeof composeCast === "function") {
-        composeCast({ text, embeds: [url] });
+        composeCast({
+          text,
+          embeds: [url], // ✅ direk link embed
+        });
         showToast("Opening cast… ✍️", 1000);
         return;
       }
     } catch {}
 
-    // 2) Native share sheet
     try {
+      // ✅ 2) Native share
       if (typeof navigator !== "undefined" && "share" in navigator) {
         const shareFn = (navigator as Navigator & { share?: (data: { text?: string; url?: string }) => Promise<void> }).share;
         if (shareFn) {
@@ -831,14 +846,26 @@ export default function BrickBreakerMiniApp() {
       }
     } catch {}
 
-    // 3) Clipboard fallback
+    // ✅ 3) Clipboard fallback
     try {
       void navigator.clipboard.writeText(text);
       showToast("Copied ✅", 1200);
     } catch {
       showToast("Share failed ❌", 1400);
     }
-  }, [DAILY_ATTEMPTS, attemptsLeft, composeCast, dailyId, gameState, level, practiceMode, score, showToast, streak, todayBest]);
+  }, [
+    DAILY_ATTEMPTS,
+    attemptsLeft,
+    composeCast,
+    dailyId,
+    gameState,
+    level,
+    practiceMode,
+    score,
+    showToast,
+    streak,
+    todayBest,
+  ]);
 
   // pointer controls (canvas)
   useEffect(() => {
@@ -868,7 +895,6 @@ export default function BrickBreakerMiniApp() {
       if (gs === "idle") launchBalls();
       else if (gs === "paused") {
         setGameState("running");
-        haptic(10);
         beep(360, 40, 0.02);
       } else if (gs === "win") nextLevelFn();
       else if (gs === "gameover") {
@@ -905,7 +931,7 @@ export default function BrickBreakerMiniApp() {
       canvas.removeEventListener("pointerup", onUp);
       canvas.removeEventListener("pointercancel", onUp);
     };
-  }, [attemptsLeft, beep, haptic, launchBalls, nextLevelFn, practiceMode, resetGame, scale, showToast, ui.wall]);
+  }, [attemptsLeft, beep, launchBalls, nextLevelFn, practiceMode, resetGame, scale, showToast, ui.wall]);
 
   // Commit leaderboard on gameover once (daily only) + runStarted reset
   const lastCommittedStateRef = useRef<GameState>("idle");
@@ -1131,7 +1157,6 @@ export default function BrickBreakerMiniApp() {
           b.vx = speed * Math.sin(angle);
           b.vy = -Math.abs(speed * Math.cos(angle));
 
-          haptic(8);
           beep(520, 25, 0.015);
         }
 
@@ -1160,7 +1185,6 @@ export default function BrickBreakerMiniApp() {
         }
 
         if (brokeBrick) {
-          haptic(12);
           beep(720, 18, 0.02);
         }
       }
@@ -1173,7 +1197,6 @@ export default function BrickBreakerMiniApp() {
         resetBallsToPaddle();
         spawnWinParticles();
 
-        haptic(60);
         beep(880, 80, 0.03);
         beep(660, 90, 0.02);
 
@@ -1320,7 +1343,6 @@ export default function BrickBreakerMiniApp() {
     beep,
     commitLeaderboardIfNeeded,
     gameState,
-    haptic,
     loseLifeOrBall,
     maybeUpdateDailyBest,
     practiceInfiniteLives,
@@ -1341,6 +1363,9 @@ export default function BrickBreakerMiniApp() {
 
   const myAddr = (userAddr || "").toLowerCase().trim();
   const myName = shortAddr(myAddr || userKeyRef.current);
+
+  const playLabel = gameState === "running" ? "Stop" : gameState === "paused" ? "Play" : "Play";
+  const playIcon = gameState === "running" ? "⏸" : "▶";
 
   return (
     <div
@@ -1429,33 +1454,12 @@ export default function BrickBreakerMiniApp() {
                       <span className="font-extrabold text-white/90">{soundOn ? "ON" : "OFF"}</span>
                     </button>
 
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setHapticsOn((v) => {
-                          const next = !v;
-                          if (next) haptic(20);
-                          showToast(next ? "Haptics ON 📳" : "Haptics OFF 📴", 900);
-                          return next;
-                        });
-                      }}
-                      className="w-full flex items-center justify-between px-3 py-2 rounded-2xl bg-white/5 border border-white/10 active:scale-[0.99]"
-                    >
-                      <span className="flex items-center gap-2">
-                        <span>{hapticsOn ? "📳" : "📴"}</span>
-                        <span className="text-white/80">Haptics</span>
-                      </span>
-                      <span className="font-extrabold text-white/90">{hapticsOn ? "ON" : "OFF"}</span>
-                    </button>
-
                     <div className="w-full flex items-center justify-between px-3 py-2 rounded-2xl bg-white/5 border border-white/10">
                       <span className="flex items-center gap-2">
                         <span>{practiceMode ? "∞" : "🎯"}</span>
                         <span className="text-white/80">Attempts</span>
                       </span>
-                      <span className="font-extrabold text-white/90">
-                        {practiceMode ? "∞" : `${attemptsLeft}/${DAILY_ATTEMPTS}`}
-                      </span>
+                      <span className="font-extrabold text-white/90">{practiceMode ? "∞" : `${attemptsLeft}/${DAILY_ATTEMPTS}`}</span>
                     </div>
 
                     <button
@@ -1464,7 +1468,6 @@ export default function BrickBreakerMiniApp() {
                         setPracticeMode((v) => {
                           const next = !v;
                           showToast(next ? "Practice mode 🧪" : "Daily mode 🎯", 1000);
-                          haptic(20);
                           beep(next ? 500 : 700, 40, 0.02);
 
                           runStartedRef.current = false;
@@ -1497,7 +1500,6 @@ export default function BrickBreakerMiniApp() {
                           setPracticeInfiniteLives((v) => {
                             const next = !v;
                             showToast(next ? "Infinite lives ❤️∞" : "Lives normal ❤️", 1000);
-                            haptic(15);
                             beep(next ? 860 : 420, 35, 0.02);
                             return next;
                           });
@@ -1535,99 +1537,49 @@ export default function BrickBreakerMiniApp() {
       </div>
 
       {/* GAME AREA */}
-      <div className="px-3 pt-2 pb-24">
-        <div
-          ref={gameCardRef}
-          className="rounded-[30px] overflow-hidden border border-white/10 bg-white/[0.03] shadow-[0_0_0_1px_rgba(255,255,255,0.02)]"
-        >
+      <div className="px-3 pt-2 pb-28">
+        <div ref={gameCardRef} className="rounded-[30px] overflow-hidden border border-white/10 bg-white/[0.03] shadow-[0_0_0_1px_rgba(255,255,255,0.02)]">
           <canvas ref={canvasRef} className="block touch-none select-none" />
         </div>
       </div>
 
-     {/* BOTTOM CONTROL BAR */}
-<div className="pointer-events-none fixed bottom-4 left-0 right-0 z-40 flex justify-center px-3">
-  <div className="pointer-events-auto w-full max-w-[520px] rounded-3xl border border-white/10 bg-white/[0.06] backdrop-blur-xl shadow-xl px-4 py-3">
-    <div className="grid grid-cols-3 items-center gap-3">
-      {/* LEFT: PLAY / PAUSE / RESUME / CONTINUE */}
-      <button
-        type="button"
-        onClick={() => {
-          if (dailyLocked) return showToast("Come back tomorrow ⏳", 1200);
+      {/* BOTTOM CONTROL BAR (big, spaced, left-mid-right) */}
+      <div className="pointer-events-none fixed bottom-4 left-0 right-0 z-40 flex justify-center px-3">
+        <div className="pointer-events-auto w-full max-w-[520px] rounded-[28px] border border-white/10 bg-white/[0.06] backdrop-blur-xl shadow-2xl px-3 py-3">
+          <div className="flex items-stretch gap-3">
+            {/* LEFT: PLAY/STOP */}
+            <BottomBarButton
+              title={playLabel}
+              icon={playIcon}
+              disabled={dailyLocked}
+              onClick={() => {
+                if (dailyLocked) return showToast("Come back tomorrow ⏳", 1200);
 
-          if (gameState === "idle") return launchBalls();
-          if (gameState === "running") return setGameState("paused");
-          if (gameState === "paused") return setGameState("running");
-          if (gameState === "gameover") return resetGame(1);
-          if (gameState === "win") return nextLevelFn();
-        }}
-        className={[
-          "h-14 w-full rounded-2xl",
-          "bg-white/10 border border-white/15",
-          "backdrop-blur-md shadow",
-          "active:scale-[0.99]",
-          "disabled:opacity-40 disabled:active:scale-100",
-          "flex items-center justify-center gap-2",
-          "text-[15px] font-extrabold text-white/95",
-        ].join(" ")}
-      >
-        <span className="text-xl">
-          {gameState === "running" ? "⏸" : gameState === "paused" ? "▶" : gameState === "idle" ? "▶" : gameState === "win" ? "⏭" : "↻"}
-        </span>
-        <span>
-          {gameState === "running"
-            ? "Pause"
-            : gameState === "paused"
-              ? "Resume"
-              : gameState === "idle"
-                ? "Play"
-                : gameState === "win"
-                  ? "Next"
-                  : "Continue"}
-        </span>
-      </button>
+                if (gameState === "idle") return launchBalls();
+                if (gameState === "running") return setGameState("paused");
+                if (gameState === "paused") return setGameState("running");
+                if (gameState === "gameover") return resetGame(1);
+                if (gameState === "win") return nextLevelFn();
+              }}
+            />
 
-      {/* CENTER: RESTART */}
-      <button
-        type="button"
-        onClick={() => {
-          if (dailyLocked) return showToast("Come back tomorrow ⏳", 1200);
-          resetGame(1);
-          showToast("Restart 🔄", 900);
-        }}
-        className={[
-          "h-14 w-full rounded-2xl",
-          "bg-white/10 border border-white/15",
-          "backdrop-blur-md shadow",
-          "active:scale-[0.99]",
-          "disabled:opacity-40 disabled:active:scale-100",
-          "flex items-center justify-center gap-2",
-          "text-[15px] font-extrabold text-white/95",
-        ].join(" ")}
-      >
-        <span className="text-xl">↻</span>
-        <span>Restart</span>
-      </button>
+            {/* MIDDLE: RESTART */}
+            <BottomBarButton
+              title="Restart"
+              icon="↻"
+              disabled={dailyLocked}
+              onClick={() => {
+                if (dailyLocked) return showToast("Come back tomorrow ⏳", 1200);
+                resetGame(1);
+                showToast("Restarted 🔄", 900);
+              }}
+            />
 
-      {/* RIGHT: SHARE */}
-      <button
-        type="button"
-        onClick={shareScore}
-        className={[
-          "h-14 w-full rounded-2xl",
-          "bg-white/10 border border-white/15",
-          "backdrop-blur-md shadow",
-          "active:scale-[0.99]",
-          "disabled:opacity-40 disabled:active:scale-100",
-          "flex items-center justify-center gap-2",
-          "text-[15px] font-extrabold text-white/95",
-        ].join(" ")}
-      >
-        <span className="text-xl">⤴</span>
-        <span>Share</span>
-      </button>
-    </div>
-  </div>
-</div>
+            {/* RIGHT: SHARE */}
+            <BottomBarButton title="Share" icon="⤴" onClick={shareScore} />
+          </div>
+        </div>
+      </div>
 
       {/* LEADERBOARD MODAL */}
       {lbOpen && (
@@ -1668,7 +1620,7 @@ export default function BrickBreakerMiniApp() {
                   {boardToShow.map((e, idx) => {
                     const addr =
                       "address" in (e as RemoteLBEntry) && typeof (e as RemoteLBEntry).address === "string"
-                        ? (((e as RemoteLBEntry).address || "").toLowerCase() as string)
+                        ? ((e as RemoteLBEntry).address || "").toLowerCase()
                         : "";
 
                     const isMe =
@@ -1678,7 +1630,9 @@ export default function BrickBreakerMiniApp() {
                     return (
                       <div
                         key={`${e.t}-${idx}`}
-                        className={`flex items-center gap-3 px-3 py-2 rounded-2xl border ${isMe ? "bg-white/10 border-white/30" : "bg-white/5 border-white/10"}`}
+                        className={`flex items-center gap-3 px-3 py-2 rounded-2xl border ${
+                          isMe ? "bg-white/10 border-white/30" : "bg-white/5 border-white/10"
+                        }`}
                       >
                         <div className={`w-6 font-extrabold tabular-nums ${isMe ? "text-white" : "text-white/70"}`}>{idx + 1}</div>
 
@@ -1709,7 +1663,7 @@ export default function BrickBreakerMiniApp() {
 
       {/* TOAST */}
       {toast && (
-        <div className="fixed left-0 right-0 bottom-24 flex justify-center pointer-events-none z-50">
+        <div className="fixed left-0 right-0 bottom-28 flex justify-center pointer-events-none z-50 px-3">
           <div className="px-3 py-2 rounded-2xl bg-black/80 border border-white/10 text-white text-sm shadow">{toast}</div>
         </div>
       )}
