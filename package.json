@@ -9,6 +9,7 @@
     "lint": "next lint"
   },
   "dependencies": {
+    "@coinbase/onchainkit": "^1.1.2",
     "@supabase/supabase-js": "^2.98.0",
     "@tanstack/react-query": "^5.81.5",
     "ethers": "^6.16.0",
