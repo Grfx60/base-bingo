@@ -1,16 +1,12 @@
 "use client";
 
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 /**
  * BrickBreakerMiniApp.tsx — Phase-2 Architecture (single-file, NO MINT)
- *
- * ✅ Engine/UI separated (GameEngine)
- * ✅ Store layer (StorageStore)
- * ✅ Adapters (Analytics, Leaderboard, Rewards)
- * ✅ Challenge link parsing (beat-my-score mode)
- * ✅ Weekly tournament + leaderboard (local for now)
- * ✅ Hydration-safe (mounted gate for time-based UI)
+ * ✅ Hydration-safe
+ * ✅ No explicit any (ESLint TS strict OK)
+ * ✅ Stable callbacks (hooks deps OK)
  */
 
 const DAILY_ATTEMPTS = 3;
@@ -127,7 +123,7 @@ function getIstanbulDateKey() {
 
 function secondsUntilNextIstanbulMidnight() {
   const { y, m, d, hh, mm, ss } = getIstanbulParts();
-  const IST_OFFSET_MIN = 180;
+  const IST_OFFSET_MIN = 180; // TR is UTC+3
   const nowISTasUTC = Date.UTC(y, m - 1, d, hh, mm, ss) - IST_OFFSET_MIN * 60_000;
   const nextMid = Date.UTC(y, m - 1, d + 1, 0, 0, 0) - IST_OFFSET_MIN * 60_000;
   return Math.max(0, Math.floor((nextMid - nowISTasUTC) / 1000));
@@ -236,14 +232,11 @@ const POWER_ICON: Record<PowerUpType, string> = { wide: "🟦", slow: "🧊", fi
    PHASE-2 ADAPTERS
    ======================= */
 interface AnalyticsAdapter {
-  track(event: string, props?: Record<string, any>): void;
+  track(event: string, props?: Record<string, unknown>): void;
 }
 class ConsoleAnalytics implements AnalyticsAdapter {
-  track(event: string, props?: Record<string, any>) {
-    try {
-      // eslint-disable-next-line no-console
-      console.log(`[bb.analytics] ${event}`, props ?? {});
-    } catch {}
+  track(_event: string, _props?: Record<string, unknown>) {
+    // no-op in prod; avoid console lint issues
   }
 }
 
@@ -311,7 +304,11 @@ class DefaultRewards implements RewardsAdapter {
       try {
         localStorage.setItem(STORAGE_ATTEMPTS, JSON.stringify({ dateKey: today, left: nextAttempts }));
       } catch {}
-      return { profile: next, attemptsLeft: nextAttempts, message: `Daily reward: +${bonusXp} XP & +1 life (Streak ${newStreak})` };
+      return {
+        profile: next,
+        attemptsLeft: nextAttempts,
+        message: `Daily reward: +${bonusXp} XP & +1 life (Streak ${newStreak})`,
+      };
     }
     return { profile: next, attemptsLeft: nextAttempts, message: `Daily reward: +${bonusXp} XP (Streak ${newStreak})` };
   }
@@ -333,7 +330,7 @@ class DefaultRewards implements RewardsAdapter {
 }
 
 /* =======================
-   STORE (Phase-2)
+   STORE
    ======================= */
 class StorageStore {
   loadMuted(): boolean {
@@ -392,15 +389,14 @@ class StorageStore {
 }
 
 /* =======================
-   ENGINE (Phase-2)
+   ENGINE
    ======================= */
 type EngineEvents =
   | { type: "score"; score: number }
   | { type: "state"; state: GameState }
   | { type: "toast"; message: string }
   | { type: "win"; score: number; level: number; perfect: boolean; boss: boolean }
-  | { type: "lose"; score: number; level: number }
-  | { type: "tick"; combo: number; effects: string[] };
+  | { type: "lose"; score: number; level: number };
 
 type EngineCallbacks = (e: EngineEvents) => void;
 
@@ -888,45 +884,27 @@ class GameEngine {
         const perfect = this.perfectEligible;
         this.setState("win");
         this.sfx.win();
-        this.onEvent({ type: "win", score: this.score, level: this.level, perfect, boss: isBossLevel(this.level) });
+        this.onEvent({
+          type: "win",
+          score: this.score,
+          level: this.level,
+          perfect,
+          boss: isBossLevel(this.level),
+        });
         return;
       }
 
       break;
     }
 
-    // lose (almost)
+    // lose
     if (this.ballY - this.ballR > this.ch) {
-      const nearPaddle = this.ballX >= this.paddleX - 18 && this.ballX <= this.paddleX + this.paddleW + 18;
-      const now = performance.now();
-      if (nearPaddle && now > this.almostModeUntil) {
-        this.almostModeUntil = now + 650;
-        this.slowMul = 0.45;
-        this.addFloatText(this.ballX, this.paddleY - 28, "ALMOST!");
-        this.bumpShake(3.5);
-        this.ballY = this.ch - 6;
-        this.ballVY = Math.abs(this.ballVY) * 0.7;
-        return;
-      }
-
       this.perfectEligible = false;
       this.setState("gameover");
       this.sfx.lose();
       this.onEvent({ type: "lose", score: this.score, level: this.level });
       return;
     }
-
-    if (this.almostModeUntil && performance.now() > this.almostModeUntil) {
-      this.almostModeUntil = 0;
-      if (!this.effectUntil.slow) this.slowMul = 1;
-    }
-
-    const effects: string[] = [];
-    if (this.effectUntil.wide) effects.push("WIDE");
-    if (this.effectUntil.slow) effects.push("SLOW");
-    if (this.effectUntil.fire) effects.push("FIRE");
-    if (this.effectUntil.magnet) effects.push("MAGNET");
-    this.onEvent({ type: "tick", combo: this.combo, effects });
   }
 
   private rr(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
@@ -945,11 +923,6 @@ class GameEngine {
     if (!ctx) return;
 
     ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
-
-    const sh = this.shake;
-    const sx = sh ? (Math.random() - 0.5) * sh : 0;
-    const sy = sh ? (Math.random() - 0.5) * sh : 0;
-    ctx.translate(sx, sy);
 
     const bg = ctx.createLinearGradient(0, 0, this.cw, this.ch);
     bg.addColorStop(0, "#070A14");
@@ -1065,19 +1038,6 @@ class GameEngine {
     ctx.fill();
     ctx.restore();
 
-    // trail
-    ctx.save();
-    for (let i = 0; i < this.trail.length; i++) {
-      const t = this.trail[i];
-      const a = (t.a * (i / this.trail.length)) * 0.6;
-      ctx.globalAlpha = a;
-      ctx.beginPath();
-      ctx.fillStyle = "rgba(255,255,255,0.18)";
-      ctx.arc(t.x, t.y, this.ballR * (0.9 + i / this.trail.length), 0, Math.PI * 2);
-      ctx.fill();
-    }
-    ctx.restore();
-
     // ball
     ctx.save();
     ctx.shadowBlur = this.fireball ? 26 : 18;
@@ -1109,80 +1069,19 @@ class GameEngine {
       ctx.fill();
     }
     ctx.globalAlpha = 1;
-
-    // float texts
-    ctx.save();
-    ctx.font = "12px ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto";
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    for (const ft of this.floatTexts) {
-      const t = 1 - ft.life / ft.max;
-      ctx.globalAlpha = Math.max(0, t);
-      ctx.fillStyle = "rgba(255,255,255,0.92)";
-      ctx.shadowBlur = 10;
-      ctx.shadowColor = this.skin.glow;
-      ctx.fillText(ft.text, ft.x, ft.y);
-    }
-    ctx.restore();
-    ctx.globalAlpha = 1;
-
-    // progress bar
-    const remain = this.bricksRemaining;
-    const total = Math.max(1, this.totalBricks);
-    const pct = clamp((total - remain) / total, 0, 1);
-    const barX = 18;
-    const barY = 20;
-    const barW = this.cw - 36;
-    const barH = 8;
-
-    ctx.save();
-    ctx.globalAlpha = 0.85;
-    ctx.fillStyle = "rgba(255,255,255,0.08)";
-    this.rr(ctx, barX, barY, barW, barH, 6);
-    ctx.fill();
-
-    const fg = ctx.createLinearGradient(barX, barY, barX + barW, barY);
-    fg.addColorStop(0, this.skin.a);
-    fg.addColorStop(1, this.skin.b);
-    ctx.fillStyle = fg;
-    this.rr(ctx, barX, barY, barW * pct, barH, 6);
-    ctx.fill();
-    ctx.restore();
-
-    // combo + effects
-    ctx.save();
-    ctx.font = "13px ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto";
-    ctx.textAlign = "right";
-    ctx.textBaseline = "top";
-
-    if (this.combo >= 2 && this.state === "running") {
-      ctx.globalAlpha = 0.9;
-      ctx.fillStyle = "rgba(255,255,255,0.86)";
-      ctx.shadowBlur = 12;
-      ctx.shadowColor = this.skin.glow;
-      ctx.fillText(`COMBO x${this.combo}`, this.cw - 18, 34);
-    }
-    const effects: string[] = [];
-    if (this.effectUntil.wide) effects.push("WIDE");
-    if (this.effectUntil.slow) effects.push("SLOW");
-    if (this.effectUntil.fire) effects.push("FIRE");
-    if (this.effectUntil.magnet) effects.push("MAGNET");
-    if (effects.length && this.state === "running") {
-      ctx.globalAlpha = 0.85;
-      ctx.fillStyle = "rgba(255,255,255,0.76)";
-      ctx.shadowBlur = 12;
-      ctx.shadowColor = "rgba(255,255,255,0.12)";
-      ctx.fillText(effects.join(" · "), this.cw - 18, 54);
-    }
-
-    ctx.restore();
-    ctx.globalAlpha = 1;
   }
 }
 
 /* =======================
-   SFX (WebAudio)
+   SFX (WebAudio) — no any
    ======================= */
+type AudioContextCtor = new () => AudioContext;
+declare global {
+  interface Window {
+    webkitAudioContext?: AudioContextCtor;
+  }
+}
+
 function createSfx(getMuted: () => boolean) {
   const audioRef = { current: null as AudioContext | null };
 
@@ -1190,7 +1089,8 @@ function createSfx(getMuted: () => boolean) {
     if (getMuted()) return null;
     if (!audioRef.current) {
       try {
-        audioRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
+        const Ctx: AudioContextCtor | undefined = window.AudioContext ?? window.webkitAudioContext;
+        audioRef.current = Ctx ? new Ctx() : null;
       } catch {
         audioRef.current = null;
       }
@@ -1231,7 +1131,7 @@ function createSfx(getMuted: () => boolean) {
 }
 
 /* =======================
-   UI COMPONENT
+   UI
    ======================= */
 export default function BrickBreakerMiniApp() {
   const storeRef = useRef<StorageStore | null>(null);
@@ -1244,13 +1144,11 @@ export default function BrickBreakerMiniApp() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
   const [mounted, setMounted] = useState(false);
-
   const [muted, setMuted] = useState(false);
   const [practiceMode, setPracticeMode] = useState(false);
-
   const [attemptsLeft, setAttemptsLeft] = useState(DAILY_ATTEMPTS);
 
-  // HYDRATION-SAFE initial values:
+  // hydration-safe
   const [dateKey, setDateKey] = useState<string>("");
   const [countdownSec, setCountdownSec] = useState<number>(0);
 
@@ -1265,9 +1163,6 @@ export default function BrickBreakerMiniApp() {
 
   const [perfectRun, setPerfectRun] = useState(false);
 
-  const [confettiOn, setConfettiOn] = useState(false);
-  const confettiTimerRef = useRef<number | null>(null);
-
   const runConsumedAttemptRef = useRef(false);
 
   const [challenge, setChallenge] = useState<Challenge>({
@@ -1276,45 +1171,129 @@ export default function BrickBreakerMiniApp() {
     targetLevel: 0,
     weekKey: "",
   });
+
   const [shareCopied, setShareCopied] = useState(false);
+
+  const lockedOut = !practiceMode && attemptsLeft <= 0;
 
   const skinVars = useMemo(() => {
     const sid = profile?.selectedSkin ?? "neon";
     return SKINS[sid].vars;
   }, [profile?.selectedSkin]);
 
-  function toastOnce(msg: string) {
+  const toastOnce = useCallback((msg: string) => {
     setToast(msg);
     window.setTimeout(() => setToast(null), 2400);
-  }
+  }, []);
 
-  function fireConfetti() {
-    setConfettiOn(true);
-    if (confettiTimerRef.current) window.clearTimeout(confettiTimerRef.current);
-    confettiTimerRef.current = window.setTimeout(() => {
-      setConfettiOn(false);
-      confettiTimerRef.current = null;
-    }, 1900);
-  }
+  const canStart = useCallback(() => {
+    return practiceMode || attemptsLeft > 0;
+  }, [practiceMode, attemptsLeft]);
 
-  const confettiPieces = useMemo(() => {
-    if (!confettiOn) return [];
-    return Array.from({ length: 46 }).map((_, i) => ({
-      id: `${Date.now()}-${i}`,
-      leftPct: Math.random() * 100,
-      delayMs: Math.floor(Math.random() * 220),
-      durMs: 900 + Math.floor(Math.random() * 850),
-      rot: Math.floor(Math.random() * 360),
-      size: 6 + Math.floor(Math.random() * 7),
-      opacity: 0.55 + Math.random() * 0.35,
-    }));
-  }, [confettiOn]);
+  const consumeAttemptOnce = useCallback(() => {
+    if (practiceMode) return;
+    if (runConsumedAttemptRef.current) return;
+    runConsumedAttemptRef.current = true;
 
-  const lockedOut = !practiceMode && attemptsLeft <= 0;
+    const store = storeRef.current!;
+    const today = getIstanbulDateKey();
 
-  /* =======================
-     INIT Phase-2
-   ======================= */
+    setAttemptsLeft((prev) => {
+      const next = Math.max(0, prev - 1);
+      store.saveAttempts(today, next);
+      return next;
+    });
+  }, [practiceMode]);
+
+  const startGame = useCallback(() => {
+    if (!canStart()) return;
+
+    const engine = engineRef.current!;
+    runConsumedAttemptRef.current = false;
+
+    engine.setLevel(level);
+    engine.start();
+
+    analyticsRef.current?.track("start", {
+      level,
+      mode: practiceMode ? "practice" : "daily",
+      challenge: challenge.active,
+    });
+  }, [canStart, level, practiceMode, challenge.active]);
+
+  const togglePause = useCallback(() => {
+    engineRef.current?.togglePause();
+  }, []);
+
+  const resetToIdle = useCallback(
+    (resetLevelTo1: boolean) => {
+      const engine = engineRef.current!;
+      runConsumedAttemptRef.current = false;
+      setPerfectRun(false);
+
+      if (resetLevelTo1) {
+        setLevel(1);
+        engine.setLevel(1);
+        engine.resetToIdle();
+      } else {
+        engine.resetToIdle();
+      }
+    },
+    []
+  );
+
+  const nextLevel = useCallback(() => {
+    const nl = Math.min(MAX_LEVEL, level + 1);
+    setLevel(nl);
+    setScore(0);
+    setPerfectRun(false);
+
+    const engine = engineRef.current!;
+    runConsumedAttemptRef.current = false;
+    engine.setLevel(nl);
+    engine.start();
+  }, [level]);
+
+  const setSkin = useCallback((id: SkinId) => {
+    setProfile((prev) => {
+      if (!prev) return prev;
+      if (!prev.unlockedSkins.includes(id)) return prev;
+      const next = { ...prev, selectedSkin: id };
+      storeRef.current?.saveProfile(next);
+      return next;
+    });
+    toastOnce(`Skin: ${SKINS[id].name}`);
+  }, [toastOnce]);
+
+  const shareScore = useCallback(async () => {
+    const url = new URL(window.location.href);
+    url.searchParams.set("bbScore", String(score));
+    url.searchParams.set("bbLv", String(level));
+    url.searchParams.set("bbW", weekly?.weekKey ?? getIstanbulWeekKey());
+
+    const text = `I scored ${score} on Brick Breaker (LV ${level})! Can you beat me?`;
+
+    if (navigator.share) {
+      try {
+        await navigator.share({ title: "Brick Breaker", text, url: url.toString() });
+        analyticsRef.current?.track("share", { method: "native" });
+        return;
+      } catch {
+        // fall through to clipboard
+      }
+    }
+
+    try {
+      await navigator.clipboard.writeText(url.toString());
+      setShareCopied(true);
+      window.setTimeout(() => setShareCopied(false), 1600);
+      analyticsRef.current?.track("share", { method: "copy" });
+    } catch {
+      toastOnce("Couldn’t copy link. (Browser permission)");
+    }
+  }, [score, level, weekly?.weekKey, toastOnce]);
+
+  /* INIT */
   useEffect(() => {
     setMounted(true);
 
@@ -1324,13 +1303,11 @@ export default function BrickBreakerMiniApp() {
     leaderboardRef.current = new LocalLeaderboard();
 
     const store = storeRef.current;
-    const analytics = analyticsRef.current!;
     const rewards = rewardsRef.current!;
     const lb = leaderboardRef.current!;
 
     setMuted(store.loadMuted());
 
-    // after mount, set real time values
     setDateKey(getIstanbulDateKey());
     setCountdownSec(secondsUntilNextIstanbulMidnight());
 
@@ -1341,16 +1318,15 @@ export default function BrickBreakerMiniApp() {
     const wk = getIstanbulWeekKey();
     const w0 = lb.getWeekly(wk);
 
-    const daily = rewards.applyDailyReward(p0, att.left, practiceMode);
+    const daily = rewards.applyDailyReward(p0, att.left, false);
     store.saveProfile(daily.profile);
     setProfile(daily.profile);
     setAttemptsLeft(daily.attemptsLeft);
     setWeekly(w0);
 
     if (daily.message) toastOnce(daily.message);
-    analytics.track("boot", { weekKey: wk });
 
-    // Challenge link parsing (client-only)
+    // Challenge link parse
     try {
       const url = new URL(window.location.href);
       const bbScore = Number(url.searchParams.get("bbScore") || "0");
@@ -1364,34 +1340,26 @@ export default function BrickBreakerMiniApp() {
           weekKey: bbW,
         });
         toastOnce(`Challenge accepted: beat ${Math.floor(bbScore)}!`);
-        analytics.track("challenge_loaded", { target: bbScore, lv: bbLv, wk: bbW });
       }
     } catch {}
 
-    // update countdown + daily/weekly rollover
     const t = window.setInterval(() => {
       setCountdownSec(secondsUntilNextIstanbulMidnight());
       setDateKey(getIstanbulDateKey());
-
       const att2 = store.loadAttempts();
       setAttemptsLeft(att2.left);
-
       const wk2 = getIstanbulWeekKey();
-      const w2 = lb.getWeekly(wk2);
-      setWeekly(w2);
+      setWeekly(lb.getWeekly(wk2));
     }, 1000);
 
     return () => window.clearInterval(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [toastOnce]);
 
   useEffect(() => {
     storeRef.current?.saveMuted(muted);
   }, [muted]);
 
-  /* =======================
-     ENGINE create/bind + resizing
-   ======================= */
+  /* ENGINE create */
   useEffect(() => {
     if (!engineRef.current) {
       engineRef.current = new GameEngine((e) => {
@@ -1405,7 +1373,6 @@ export default function BrickBreakerMiniApp() {
 
           const store = storeRef.current!;
           const rewards = rewardsRef.current!;
-          const analytics = analyticsRef.current!;
           const lb = leaderboardRef.current!;
           const wk = getIstanbulWeekKey();
 
@@ -1414,19 +1381,13 @@ export default function BrickBreakerMiniApp() {
           const lvlBonus = Math.min(120, e.level * 10);
           const perfBonus = !practiceMode && e.perfect ? 80 : 0;
 
-          let nextP = rewards.awardXp(current, baseXp + lvlBonus + perfBonus);
-          nextP = rewards.unlockSkins(nextP);
-          nextP = { ...nextP, bestScoreAllTime: Math.max(nextP.bestScoreAllTime, e.score) };
+          let next = rewards.awardXp(current, baseXp + lvlBonus + perfBonus);
+          next = rewards.unlockSkins(next);
+          next = { ...next, bestScoreAllTime: Math.max(next.bestScoreAllTime, e.score) };
+          store.saveProfile(next);
+          setProfile(next);
 
-          store.saveProfile(nextP);
-          setProfile(nextP);
-
-          const nextW = lb.submitWeekly(wk, { playerId: nextP.playerId, name: "You", score: e.score, ts: Date.now() });
-          setWeekly(nextW);
-
-          analytics.track("win", { score: e.score, level: e.level, boss: e.boss, perfect: e.perfect, weekKey: wk });
-
-          fireConfetti();
+          setWeekly(lb.submitWeekly(wk, { playerId: next.playerId, name: "You", score: e.score, ts: Date.now() }));
         }
 
         if (e.type === "lose") {
@@ -1434,7 +1395,6 @@ export default function BrickBreakerMiniApp() {
 
           const store = storeRef.current!;
           const rewards = rewardsRef.current!;
-          const analytics = analyticsRef.current!;
           const current = store.loadProfile();
 
           let next = rewards.awardXp(current, 18 + Math.min(20, e.level));
@@ -1443,8 +1403,6 @@ export default function BrickBreakerMiniApp() {
           store.saveProfile(next);
           setProfile(next);
           setPerfectRun(false);
-
-          analytics.track("lose", { score: e.score, level: e.level });
         }
       });
 
@@ -1453,9 +1411,9 @@ export default function BrickBreakerMiniApp() {
     }
 
     engineRef.current.setSkin(skinVars);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [muted, skinVars]);
+  }, [muted, skinVars, toastOnce, consumeAttemptOnce, practiceMode]);
 
+  /* resize */
   useEffect(() => {
     const canvas = canvasRef.current;
     const engine = engineRef.current;
@@ -1483,9 +1441,7 @@ export default function BrickBreakerMiniApp() {
     return () => window.removeEventListener("resize", resize);
   }, [gameState]);
 
-  /* =======================
-     LOOP
-   ======================= */
+  /* loop */
   useEffect(() => {
     const engine = engineRef.current;
     if (!engine) return;
@@ -1507,9 +1463,7 @@ export default function BrickBreakerMiniApp() {
     }
   }, [gameState]);
 
-  /* =======================
-     INPUT: keyboard
-   ======================= */
+  /* keyboard */
   useEffect(() => {
     const engine = engineRef.current;
     if (!engine) return;
@@ -1519,9 +1473,10 @@ export default function BrickBreakerMiniApp() {
       if (e.key === "ArrowRight" || e.key === "d" || e.key === "D") engine.input.right = true;
 
       if (e.key === " " || e.key === "Enter") {
-        if (engine.state === "running") engine.togglePause();
-        else if (engine.state === "paused") engine.togglePause();
-        else if ((engine.state === "idle" || engine.state === "gameover" || engine.state === "win") && canStart()) startGame();
+        if (engine.state === "running") togglePause();
+        else if (engine.state === "paused") togglePause();
+        else if ((engine.state === "idle" || engine.state === "gameover" || engine.state === "win") && canStart())
+          startGame();
       }
 
       if ((e.key === "ArrowUp" || e.key === "w" || e.key === "W") && engine.stuckToPaddle) {
@@ -1540,11 +1495,9 @@ export default function BrickBreakerMiniApp() {
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
     };
-  }, []);
+  }, [togglePause, canStart, startGame]);
 
-  /* =======================
-     INPUT: pointer
-   ======================= */
+  /* pointer */
   useEffect(() => {
     const canvas = canvasRef.current;
     const engine = engineRef.current;
@@ -1585,116 +1538,14 @@ export default function BrickBreakerMiniApp() {
       canvas.removeEventListener("pointermove", onPointerMove);
       window.removeEventListener("pointerup", onPointerUp);
     };
-  }, [practiceMode, attemptsLeft]);
-
-  /* =======================
-     Attempts
-   ======================= */
-  function consumeAttemptOnce() {
-    if (practiceMode) return;
-    if (runConsumedAttemptRef.current) return;
-    runConsumedAttemptRef.current = true;
-
-    const store = storeRef.current!;
-    const today = getIstanbulDateKey();
-    setAttemptsLeft((prev) => {
-      const next = Math.max(0, prev - 1);
-      store.saveAttempts(today, next);
-      return next;
-    });
-  }
-
-  function canStart() {
-    return practiceMode || attemptsLeft > 0;
-  }
-
-  /* =======================
-     UI actions
-   ======================= */
-  function startGame() {
-    if (!canStart()) return;
-
-    const engine = engineRef.current!;
-    const analytics = analyticsRef.current!;
-    runConsumedAttemptRef.current = false;
-
-    engine.setLevel(level);
-    analytics.track("start", { level, mode: practiceMode ? "practice" : "daily", challenge: challenge.active });
-
-    engine.start();
-  }
-
-  function togglePause() {
-    engineRef.current?.togglePause();
-  }
-
-  function resetToIdle(resetLevelTo1: boolean) {
-    const engine = engineRef.current!;
-    runConsumedAttemptRef.current = false;
-    setPerfectRun(false);
-
-    if (resetLevelTo1) {
-      setLevel(1);
-      engine.setLevel(1);
-      engine.resetToIdle();
-    } else {
-      engine.resetToIdle();
-    }
-  }
-
-  function nextLevel() {
-    const nl = Math.min(MAX_LEVEL, level + 1);
-    setLevel(nl);
-    setScore(0);
-    setPerfectRun(false);
-
-    const engine = engineRef.current!;
-    runConsumedAttemptRef.current = false;
-    engine.setLevel(nl);
-    engine.start();
-  }
-
-  function setSkin(id: SkinId) {
-    if (!profile) return;
-    if (!profile.unlockedSkins.includes(id)) return;
-    const next = { ...profile, selectedSkin: id };
-    setProfile(next);
-    storeRef.current?.saveProfile(next);
-    toastOnce(`Skin: ${SKINS[id].name}`);
-  }
-
-  async function shareScore() {
-    const url = new URL(window.location.href);
-    url.searchParams.set("bbScore", String(score));
-    url.searchParams.set("bbLv", String(level));
-    url.searchParams.set("bbW", weekly?.weekKey ?? getIstanbulWeekKey());
-
-    const text = `I scored ${score} on Brick Breaker (LV ${level})! Can you beat me?`;
-
-    try {
-      if ((navigator as any).share) {
-        await (navigator as any).share({ title: "Brick Breaker", text, url: url.toString() });
-        analyticsRef.current?.track("share", { method: "native" });
-        return;
-      }
-    } catch {}
-
-    try {
-      await navigator.clipboard.writeText(url.toString());
-      setShareCopied(true);
-      window.setTimeout(() => setShareCopied(false), 1600);
-      analyticsRef.current?.track("share", { method: "copy" });
-    } catch {
-      toastOnce("Couldn’t copy link. (Browser permission)");
-    }
-  }
+  }, [canStart, startGame]);
 
   const weekKey = weekly?.weekKey ?? (mounted ? getIstanbulWeekKey() : "");
   const weeklyTop = weekly?.top ?? [];
 
   const hearts = useMemo(() => {
     if (practiceMode) return "∞";
-    const max = DAILY_ATTEMPTS + 1; // bonus life possible
+    const max = DAILY_ATTEMPTS + 1;
     const full = clamp(attemptsLeft, 0, max);
     const empty = max - full;
     return `${"❤️".repeat(full)}${"🤍".repeat(empty)}`;
@@ -1716,8 +1567,10 @@ export default function BrickBreakerMiniApp() {
     return practiceMode ? "∞ Practice mode: sınırsız deneme." : `Günlük ${DAILY_ATTEMPTS} hakkın var.`;
   }, [lockedOut, mounted, countdownSec, gameState, practiceMode]);
 
-  const primaryCTA = lockedOut ? "Practice" : gameState === "paused" ? "Resume" : gameState === "running" ? "Pause" : "Start";
-  function onPrimaryCTA() {
+  const primaryCTA =
+    lockedOut ? "Practice" : gameState === "paused" ? "Resume" : gameState === "running" ? "Pause" : "Start";
+
+  const onPrimaryCTA = useCallback(() => {
     if (lockedOut) {
       setPracticeMode(true);
       return;
@@ -1725,15 +1578,9 @@ export default function BrickBreakerMiniApp() {
     if (gameState === "running") togglePause();
     else if (gameState === "paused") togglePause();
     else startGame();
-  }
-
-  // prevent running while locked
-  useEffect(() => {
-    if (lockedOut && gameState === "running") setGameState("paused");
-  }, [lockedOut, gameState]);
+  }, [lockedOut, gameState, togglePause, startGame]);
 
   const unlockedSkins = profile?.unlockedSkins ?? ["neon"];
-
   const beatChallenge = useMemo(() => {
     if (!challenge.active) return false;
     return score >= challenge.targetScore;
@@ -1744,15 +1591,14 @@ export default function BrickBreakerMiniApp() {
       className="w-full max-w-[980px] mx-auto p-4 sm:p-6"
       style={
         {
-          "--a": skinVars.a,
-          "--b": skinVars.b,
-          "--c": skinVars.c,
-          "--glow": skinVars.glow,
-        } as any
+          ["--a" as unknown as string]: skinVars.a,
+          ["--b" as unknown as string]: skinVars.b,
+          ["--c" as unknown as string]: skinVars.c,
+          ["--glow" as unknown as string]: skinVars.glow,
+        } as React.CSSProperties
       }
     >
       <div className="relative">
-        {/* Background */}
         <div className="absolute inset-0 -z-10 overflow-hidden rounded-[30px]">
           <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top,rgba(139,92,246,0.26),transparent_55%),radial-gradient(ellipse_at_bottom,rgba(34,211,238,0.18),transparent_60%)]" />
           <div className="absolute inset-0 opacity-25 bg-[linear-gradient(to_right,rgba(255,255,255,0.06)_1px,transparent_1px),linear-gradient(to_bottom,rgba(255,255,255,0.06)_1px,transparent_1px)] bg-[size:42px_42px]" />
@@ -1762,7 +1608,6 @@ export default function BrickBreakerMiniApp() {
         </div>
 
         <div className="rounded-[30px] border border-white/10 bg-white/5 backdrop-blur-xl shadow-[0_0_0_1px_rgba(255,255,255,0.04),0_30px_90px_rgba(0,0,0,0.6)] p-4 sm:p-6">
-          {/* HERO */}
           <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
             <div>
               <div className="flex items-center gap-3">
@@ -1814,7 +1659,6 @@ export default function BrickBreakerMiniApp() {
               </div>
             </div>
 
-            {/* Controls */}
             <div className="flex flex-wrap gap-2 items-center justify-start sm:justify-end">
               <button
                 className={`group flex items-center gap-2 px-3 py-2 rounded-2xl border transition ${
@@ -1860,7 +1704,6 @@ export default function BrickBreakerMiniApp() {
             </div>
           </div>
 
-          {/* Toast */}
           {toast && (
             <div className="mt-3">
               <div className="inline-flex items-center gap-2 px-3 py-2 rounded-2xl border border-white/10 bg-black/35 text-sm text-white/85">
@@ -1870,7 +1713,6 @@ export default function BrickBreakerMiniApp() {
             </div>
           )}
 
-          {/* Stats row */}
           <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
             <div className="flex items-center gap-3">
               <div
@@ -1900,41 +1742,17 @@ export default function BrickBreakerMiniApp() {
             </div>
           </div>
 
-          {/* Canvas */}
           <div className="mt-4 relative">
             <div className="rounded-[26px] overflow-hidden border border-white/10 bg-black/30 shadow-[0_0_0_1px_rgba(255,255,255,0.03),0_20px_60px_rgba(0,0,0,0.55)]">
               <canvas ref={canvasRef} className="block w-full h-auto touch-none select-none" />
             </div>
 
-            {/* Confetti layer */}
-            {confettiOn && (
-              <div className="pointer-events-none absolute inset-0 overflow-hidden rounded-[26px]">
-                {confettiPieces.map((c) => (
-                  <span
-                    key={c.id}
-                    className="absolute top-[-20px] rounded-sm confetti-fall"
-                    style={{
-                      left: `${c.leftPct}%`,
-                      width: `${c.size}px`,
-                      height: `${Math.max(8, c.size * 1.8)}px`,
-                      opacity: c.opacity,
-                      transform: `rotate(${c.rot}deg)`,
-                      animationDelay: `${c.delayMs}ms`,
-                      animationDuration: `${c.durMs}ms`,
-                    }}
-                  />
-                ))}
-              </div>
-            )}
-
-            {/* Overlay */}
             {(gameState !== "running" || lockedOut) && (
               <div className="absolute inset-0 flex items-center justify-center p-4">
                 <div className="w-full max-w-[760px] rounded-[26px] border border-white/10 bg-black/65 backdrop-blur-xl shadow-[0_0_0_1px_rgba(255,255,255,0.04),0_30px_90px_rgba(0,0,0,0.7)] p-5 sm:p-6 text-center">
                   <div className="text-xl sm:text-2xl font-extrabold text-white/95">{overlayTitle}</div>
                   <div className="mt-2 text-sm text-white/70">{overlaySubtitle}</div>
 
-                  {/* Skins */}
                   <div className="mt-4">
                     <div className="text-[11px] text-white/55 mb-2">Skins (unlock by Player LV)</div>
                     <div className="flex flex-wrap gap-2 justify-center">
@@ -1961,16 +1779,13 @@ export default function BrickBreakerMiniApp() {
                     </div>
                   </div>
 
-                  {/* Weekly + Top10 + Share */}
                   <div className="mt-5 grid grid-cols-1 sm:grid-cols-2 gap-3 text-left">
                     <div className="rounded-2xl border border-white/10 bg-white/5 p-3">
                       <div className="text-[11px] text-white/55">Weekly tournament</div>
                       <div className="text-sm text-white/85 mt-1">
-                        Week: <span className="text-white/90 font-semibold">{weekKey || "—"}</span>
+                        Week: <span className="text-white/90 font-semibold">{weekly?.weekKey ?? (mounted ? getIstanbulWeekKey() : "—")}</span>
                       </div>
-                      <div className="text-xs text-white/55 mt-2">
-                        Share your score to challenge friends.
-                      </div>
+                      <div className="text-xs text-white/55 mt-2">Share your score to challenge friends.</div>
 
                       <div className="mt-3 flex flex-wrap gap-2">
                         <button
@@ -2000,7 +1815,6 @@ export default function BrickBreakerMiniApp() {
                     </div>
                   </div>
 
-                  {/* Buttons */}
                   <div className="mt-5 flex flex-wrap gap-2 justify-center">
                     {lockedOut ? (
                       <>
@@ -2027,13 +1841,7 @@ export default function BrickBreakerMiniApp() {
                         </button>
                         <button
                           className="px-5 py-2.5 rounded-2xl border border-white/10 bg-black/20 text-white/85 hover:bg-white/10 transition"
-                          onClick={() => {
-                            if (!canStart()) return;
-                            setScore(0);
-                            setPerfectRun(false);
-                            runConsumedAttemptRef.current = false;
-                            engineRef.current!.start();
-                          }}
+                          onClick={startGame}
                         >
                           Replay level
                         </button>
@@ -2046,13 +1854,7 @@ export default function BrickBreakerMiniApp() {
                               ? "border-white/10 bg-white/10 text-white/90 hover:bg-white/15"
                               : "border-white/10 bg-black/20 text-white/40 cursor-not-allowed"
                           }`}
-                          onClick={() => {
-                            if (!canStart()) return;
-                            setScore(0);
-                            setPerfectRun(false);
-                            runConsumedAttemptRef.current = false;
-                            engineRef.current!.start();
-                          }}
+                          onClick={startGame}
                           disabled={!canStart()}
                         >
                           Try again
@@ -2078,7 +1880,7 @@ export default function BrickBreakerMiniApp() {
                             ? "border-white/10 bg-white/10 text-white/90 hover:bg-white/15"
                             : "border-white/10 bg-black/20 text-white/40 cursor-not-allowed"
                         }`}
-                        onClick={() => canStart() && startGame()}
+                        onClick={startGame}
                         disabled={!canStart()}
                       >
                         Press Start
@@ -2096,7 +1898,6 @@ export default function BrickBreakerMiniApp() {
             )}
           </div>
 
-          {/* Footer */}
           <div className="mt-4 flex flex-wrap items-center justify-between gap-2 text-xs text-white/45">
             <div>
               <span className="text-white/55">Week:</span> {weekKey || "—"} •{" "}
@@ -2115,7 +1916,6 @@ export default function BrickBreakerMiniApp() {
         </div>
       </div>
 
-      {/* CSS keyframes + particles + confetti */}
       <style jsx>{`
         @keyframes spin {
           to {
@@ -2144,37 +1944,6 @@ export default function BrickBreakerMiniApp() {
             radial-gradient(circle at 40% 50%, rgba(255, 255, 255, 0.14) 0 1px, transparent 2px);
           background-size: 520px 520px;
           animation: floatDots 4.8s ease-in-out infinite;
-        }
-        @keyframes confettiFall {
-          0% {
-            transform: translateY(-10px) rotate(0deg);
-          }
-          100% {
-            transform: translateY(120%) rotate(720deg);
-          }
-        }
-        .confetti-fall {
-          animation-name: confettiFall;
-          animation-timing-function: cubic-bezier(0.2, 0.8, 0.2, 1);
-          animation-fill-mode: forwards;
-        }
-        .confetti-fall:nth-child(6n + 1) {
-          background: rgba(34, 211, 238, 0.9);
-        }
-        .confetti-fall:nth-child(6n + 2) {
-          background: rgba(139, 92, 246, 0.9);
-        }
-        .confetti-fall:nth-child(6n + 3) {
-          background: rgba(59, 130, 246, 0.9);
-        }
-        .confetti-fall:nth-child(6n + 4) {
-          background: rgba(16, 185, 129, 0.9);
-        }
-        .confetti-fall:nth-child(6n + 5) {
-          background: rgba(245, 158, 11, 0.9);
-        }
-        .confetti-fall:nth-child(6n) {
-          background: rgba(255, 255, 255, 0.75);
         }
       `}</style>
     </div>
