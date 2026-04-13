@@ -21,6 +21,8 @@ export async function generateMetadata(): Promise<Metadata> {
           },
         },
       }),
+      // Next.js standartlarına uygun metadata eklemesi
+      "base:app_id": "69745f333a92926b661fd2df",
     },
   };
 }
@@ -43,7 +45,8 @@ export default function RootLayout({
   return (
     <html lang="en">
       <head>
-        <meta name="base:app_id" content="697e42fa2aafa0bc9ad8a2fd" />
+        {/* Base App ID doğrulaması için gerekli meta etiketi */}
+        <meta name="base:app_id" content="69745f333a92926b661fd2df" />
       </head>
       <body className={`${inter.variable} ${sourceCodePro.variable}`}>
         <RootProvider>
