@@ -1,1951 +1,935 @@
 "use client";
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useRef, useState, useCallback } from "react";
+import { createClient } from "@supabase/supabase-js";
+import { useAccount } from "wagmi";
 
-/**
- * BrickBreakerMiniApp.tsx — Phase-2 Architecture (single-file, NO MINT)
- * ✅ Hydration-safe
- * ✅ No explicit any (ESLint TS strict OK)
- * ✅ Stable callbacks (hooks deps OK)
- */
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
+const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
+const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
-const DAILY_ATTEMPTS = 3;
-const MAX_LEVEL = 30;
-const BOSS_EVERY = 5;
+const FIXED_WIDTH = 400;
+const FIXED_HEIGHT = 500;
+const PADDLE_WIDTH = 80;
+const PADDLE_HEIGHT = 12;
+const BALL_RADIUS = 8;
 
-const POWERUP_DROP_CHANCE = 0.22;
-const POWERUP_FALL_SPEED = 2.3;
-
-const EFFECT_WIDE_MS = 10_000;
-const EFFECT_SLOW_MS = 7_000;
-const EFFECT_FIRE_MS = 8_000;
-const EFFECT_MAGNET_MS = 7_000;
-
-const STORAGE_ATTEMPTS = "bb.p2.dailyAttempts.v1";
-const STORAGE_PROFILE = "bb.p2.profile.v1";
-const STORAGE_WEEKLY = "bb.p2.weekly.v1";
-const STORAGE_MUTED = "bb.p2.muted.v1";
-
-/* =======================
-   TYPES
-   ======================= */
-type GameState = "idle" | "running" | "paused" | "gameover" | "win";
-
-type Brick = {
+interface Brick {
   x: number;
   y: number;
-  w: number;
-  h: number;
-  alive: boolean;
-  hp: number;
-  hue: number;
-  isBoss?: boolean;
-};
+  width: number;
+  height: number;
+  status: number;
+  type: "normal" | "double" | "triple" | "speed" | "slow" | "wide" | "narrow" | "laser" | "magnet";
+  color: string;
+}
 
-type Particle = {
+interface Particle {
   x: number;
   y: number;
   vx: number;
   vy: number;
-  life: number;
-  max: number;
+  alpha: number;
+  color: string;
   size: number;
-  hue: number;
-};
+}
 
-type FloatText = {
+interface Laser {
   x: number;
   y: number;
-  vy: number;
-  life: number;
-  max: number;
-  text: string;
-};
-
-type PowerUpType = "wide" | "slow" | "fire" | "magnet";
-type PowerUp = {
-  id: string;
-  type: PowerUpType;
-  x: number;
-  y: number;
-  r: number;
-  vy: number;
-};
-
-type SkinId = "neon" | "plasma" | "gold" | "mint";
-
-type Profile = {
-  playerId: string;
-  xp: number;
-  playerLevel: number;
-  bestScoreAllTime: number;
-  streakDays: number;
-  lastPlayDateKey: string;
-  unlockedSkins: SkinId[];
-  selectedSkin: SkinId;
-};
-
-type WeeklyEntry = { playerId: string; name: string; score: number; ts: number };
-type WeeklyState = { weekKey: string; top: WeeklyEntry[] };
-
-type Challenge = { active: boolean; targetScore: number; targetLevel: number; weekKey: string };
-
-/* =======================
-   TIME HELPERS (Europe/Istanbul)
-   ======================= */
-function getIstanbulParts() {
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Europe/Istanbul",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: false,
-  }).formatToParts(new Date());
-  const get = (t: string) => parts.find((p) => p.type === t)?.value ?? "00";
-  return {
-    y: Number(get("year")),
-    m: Number(get("month")),
-    d: Number(get("day")),
-    hh: Number(get("hour")),
-    mm: Number(get("minute")),
-    ss: Number(get("second")),
-  };
 }
 
-function getIstanbulDateKey() {
-  const { y, m, d } = getIstanbulParts();
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${y}-${pad(m)}-${pad(d)}`;
-}
+export default function BrickBreakerMiniApp() {
+  const { address } = useAccount();
+  const userWallet = address || "Guest";
 
-function secondsUntilNextIstanbulMidnight() {
-  const { y, m, d, hh, mm, ss } = getIstanbulParts();
-  const IST_OFFSET_MIN = 180; // TR is UTC+3
-  const nowISTasUTC = Date.UTC(y, m - 1, d, hh, mm, ss) - IST_OFFSET_MIN * 60_000;
-  const nextMid = Date.UTC(y, m - 1, d + 1, 0, 0, 0) - IST_OFFSET_MIN * 60_000;
-  return Math.max(0, Math.floor((nextMid - nowISTasUTC) / 1000));
-}
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
-function formatHMS(totalSec: number) {
-  const h = Math.floor(totalSec / 3600);
-  const m = Math.floor((totalSec % 3600) / 60);
-  const s = totalSec % 60;
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${pad(h)}:${pad(m)}:${pad(s)}`;
-}
+  // --- OYUN PARAMETRELERİ / STATE'LER ---
+  const [score, setScore] = useState(0);
+  const [level, setLevel] = useState(1);
+  const [lives, setLives] = useState(4);
+  const [gameState, setGameState] = useState<"menu" | "playing" | "gameover" | "victory">("menu");
+  const [isMuted, setIsMuted] = useState(false);
 
-function getIstanbulWeekKey(): string {
-  const { y, m, d } = getIstanbulParts();
-  const date = new Date(Date.UTC(y, m - 1, d, 12, 0, 0));
-  const tmp = new Date(date.getTime());
-  tmp.setUTCDate(tmp.getUTCDate() + 3 - ((tmp.getUTCDay() + 6) % 7));
-  const week1 = new Date(Date.UTC(tmp.getUTCFullYear(), 0, 4));
-  const weekNo =
-    1 +
-    Math.round(
-      ((tmp.getTime() - week1.getTime()) / 86400000 - 3 + ((week1.getUTCDay() + 6) % 7)) / 7
-    );
-  return `${tmp.getUTCFullYear()}-W${String(weekNo).padStart(2, "0")}`;
-}
+  // Modlar: "tournament" veya "practice"
+  const [gameMode, setGameMode] = useState<"tournament" | "practice">("tournament");
 
-/* =======================
-   UTILS
-   ======================= */
-function safeJsonParse<T>(raw: string | null, fallback: T): T {
-  try {
-    if (!raw) return fallback;
-    return JSON.parse(raw) as T;
-  } catch {
-    return fallback;
-  }
-}
+  // Kullanıcı İstatistikleri
+  const [playerLv, setPlayerLv] = useState(1);
+  const [playerXp, setPlayerXp] = useState(0);
+  const [streak, setStreak] = useState(0);
 
-function clamp(n: number, a: number, b: number) {
-  return Math.max(a, Math.min(b, n));
-}
+  // Hak ve Zaman Yönetimi
+  const [attemptsLeft, setAttemptsLeft] = useState(3);
+  const [countdownStr, setCountdownStr] = useState("");
+  const [currentWeekStr, setCurrentWeekStr] = useState("");
+  const [weeklyRank, setWeeklyRank] = useState<number | string>("—");
+  const [leaderboard, setLeaderboard] = useState<any[]>([]);
 
-function uid() {
-  return Math.random().toString(16).slice(2) + "-" + Date.now().toString(16);
-}
+  // Güvenlik ve Hile Koruması
+  const [clientSessionId, setClientSessionId] = useState("");
+  const [actionLog, setActionLog] = useState<string[]>([]);
 
-function isBossLevel(lv: number) {
-  return lv > 0 && lv % BOSS_EVERY === 0;
-}
+  // Seçili Görünüm (Skin)
+  const [selectedSkin, setSelectedSkin] = useState("Default");
 
-/* =======================
-   XP CURVE
-   ======================= */
-function xpNeededForLevel(level: number) {
-  return Math.floor(120 + (level - 1) * 90 + Math.pow(level - 1, 1.3) * 55);
-}
-function computePlayerLevel(xp: number) {
-  let lvl = 1;
-  let remaining = xp;
-  while (lvl < 60) {
-    const need = xpNeededForLevel(lvl);
-    if (remaining < need) break;
-    remaining -= need;
-    lvl += 1;
-  }
-  return lvl;
-}
+  // --- REFS (Animasyon ve Gerçek Zamanlı Hesaplamalar İçin) ---
+  const scoreRef = useRef(0);
+  const levelRef = useRef(1);
+  const livesRef = useRef(4);
+  const gameStateRef = useRef<"menu" | "playing" | "gameover" | "victory">("menu");
+  const gameModeRef = useRef<"tournament" | "practice">("tournament");
+  const attemptsLeftRef = useRef(3);
 
-/* =======================
-   SKINS
-   ======================= */
-const SKINS: Record<
-  SkinId,
-  {
-    name: string;
-    unlockLevel: number;
-    vars: { a: string; b: string; c: string; glow: string };
-  }
-> = {
-  neon: {
-    name: "Neon",
-    unlockLevel: 1,
-    vars: { a: "#22d3ee", b: "#8b5cf6", c: "#3b82f6", glow: "rgba(34,211,238,0.25)" },
-  },
-  plasma: {
-    name: "Plasma",
-    unlockLevel: 4,
-    vars: { a: "#a78bfa", b: "#22d3ee", c: "#60a5fa", glow: "rgba(167,139,250,0.28)" },
-  },
-  gold: {
-    name: "Gold",
-    unlockLevel: 8,
-    vars: { a: "#f59e0b", b: "#fde68a", c: "#f97316", glow: "rgba(245,158,11,0.25)" },
-  },
-  mint: {
-    name: "Mint",
-    unlockLevel: 12,
-    vars: { a: "#34d399", b: "#22d3ee", c: "#a7f3d0", glow: "rgba(52,211,153,0.22)" },
-  },
-};
+  const paddleXRef = useRef((FIXED_WIDTH - PADDLE_WIDTH) / 2);
+  const paddleWidthRef = useRef(PADDLE_WIDTH);
+  const ballXRef = useRef(FIXED_WIDTH / 2);
+  const ballYRef = useRef(FIXED_HEIGHT - 30);
+  const ballVxFRef = useRef(3);
+  const ballVyFRef = useRef(-3);
+  const baseSpeedRef = useRef(4);
 
-const POWER_ICON: Record<PowerUpType, string> = { wide: "🟦", slow: "🧊", fire: "🔥", magnet: "🧲" };
+  const bricksRef = useRef<Brick[]>([]);
+  const particlesRef = useRef<Particle[]>([]);
+  const lasersRef = useRef<Laser[]>([]);
 
-/* =======================
-   PHASE-2 ADAPTERS
-   ======================= */
-interface AnalyticsAdapter {
-  track(event: string, props?: Record<string, unknown>): void;
-}
-class ConsoleAnalytics implements AnalyticsAdapter {
-  track(_event: string, _props?: Record<string, unknown>) {
-    // no-op in prod; avoid console lint issues
-  }
-}
+  // Güçlendirici (Power-up) Durumları
+  const activePowerUpRef = useRef<string | null>(null);
+  const powerUpTimerRef = useRef<number>(0);
+  const isMagnetAttachedRef = useRef(false);
 
-interface LeaderboardAdapter {
-  getWeekly(weekKey: string): WeeklyState;
-  submitWeekly(weekKey: string, entry: WeeklyEntry): WeeklyState;
-}
-class LocalLeaderboard implements LeaderboardAdapter {
-  getWeekly(weekKey: string): WeeklyState {
-    const w = safeJsonParse<WeeklyState | null>(localStorage.getItem(STORAGE_WEEKLY), null);
-    if (!w || w.weekKey !== weekKey) {
-      const nw: WeeklyState = { weekKey, top: [] };
-      localStorage.setItem(STORAGE_WEEKLY, JSON.stringify(nw));
-      return nw;
+  // Kontroller
+  const rightPressedRef = useRef(false);
+  const leftPressedRef = useRef(false);
+
+  // --- AUDIO SİSTEMİ ---
+  const playAudio = useCallback((type: "hit" | "brick" | "powerup" | "lose" | "victory" | "laser") => {
+    if (isMuted) return;
+    try {
+      const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+
+      if (type === "hit") {
+        osc.type = "sine";
+        osc.frequency.setValueAtTime(150, ctx.currentTime);
+        gain.gain.setValueAtTime(0.1, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.1);
+        osc.start(); osc.stop(ctx.currentTime + 0.1);
+      } else if (type === "brick") {
+        osc.type = "triangle";
+        osc.frequency.setValueAtTime(300, ctx.currentTime);
+        gain.gain.setValueAtTime(0.1, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.08);
+        osc.start(); osc.stop(ctx.currentTime + 0.08);
+      } else if (type === "powerup") {
+        osc.type = "sawtooth";
+        osc.frequency.setValueAtTime(440, ctx.currentTime);
+        osc.frequency.exponentialRampToValueAtTime(880, ctx.currentTime + 0.15);
+        gain.gain.setValueAtTime(0.08, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.15);
+        osc.start(); osc.stop(ctx.currentTime + 0.15);
+      } else if (type === "laser") {
+        osc.type = "sawtooth";
+        osc.frequency.setValueAtTime(800, ctx.currentTime);
+        osc.frequency.linearRampToValueAtTime(200, ctx.currentTime + 0.1);
+        gain.gain.setValueAtTime(0.05, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.1);
+        osc.start(); osc.stop(ctx.currentTime + 0.1);
+      } else if (type === "lose") {
+        osc.type = "sawtooth";
+        osc.frequency.setValueAtTime(200, ctx.currentTime);
+        osc.frequency.linearRampToValueAtTime(80, ctx.currentTime + 0.4);
+        gain.gain.setValueAtTime(0.2, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.4);
+        osc.start(); osc.stop(ctx.currentTime + 0.4);
+      } else if (type === "victory") {
+        osc.type = "sine";
+        osc.frequency.setValueAtTime(400, ctx.currentTime);
+        osc.frequency.setValueAtTime(600, ctx.currentTime + 0.1);
+        osc.frequency.setValueAtTime(800, ctx.currentTime + 0.2);
+        gain.gain.setValueAtTime(0.2, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.4);
+        osc.start(); osc.stop(ctx.currentTime + 0.4);
+      }
+    } catch (e) {
+      console.error(e);
     }
-    return w;
-  }
-  submitWeekly(weekKey: string, entry: WeeklyEntry): WeeklyState {
-    const base = this.getWeekly(weekKey);
-    const filtered = base.top.filter((e) => e.playerId !== entry.playerId);
-    const merged = [...filtered, entry].sort((a, b) => b.score - a.score).slice(0, 10);
-    const next: WeeklyState = { weekKey, top: merged };
-    localStorage.setItem(STORAGE_WEEKLY, JSON.stringify(next));
-    return next;
-  }
-}
+  }, [isMuted]);
 
-interface RewardsAdapter {
-  applyDailyReward(
-    profile: Profile,
-    attemptsLeft: number,
-    practice: boolean
-  ): { profile: Profile; attemptsLeft: number; message: string | null };
-  awardXp(profile: Profile, amount: number): Profile;
-  unlockSkins(profile: Profile): Profile;
-}
-class DefaultRewards implements RewardsAdapter {
-  applyDailyReward(profile: Profile, attemptsLeft: number, practice: boolean) {
-    const today = getIstanbulDateKey();
-    if (profile.lastPlayDateKey === today) return { profile, attemptsLeft, message: null };
+  // --- LOCAL REFS SENKRONİZASYONU ---
+  useEffect(() => { scoreRef.current = score; }, [score]);
+  useEffect(() => { levelRef.current = level; }, [level]);
+  useEffect(() => { livesRef.current = lives; }, [lives]);
+  useEffect(() => { gameStateRef.current = gameState; }, [gameState]);
+  useEffect(() => { gameModeRef.current = gameMode; }, [gameMode]);
+  useEffect(() => { attemptsLeftRef.current = attemptsLeft; }, [attemptsLeft]);
 
-    const prev = profile.lastPlayDateKey;
-    let newStreak = 1;
-    if (prev) {
-      const { y, m, d } = getIstanbulParts();
-      const pad = (n: number) => String(n).padStart(2, "0");
-      const yesterday = new Date(Date.UTC(y, m - 1, d, 12, 0, 0));
-      yesterday.setUTCDate(yesterday.getUTCDate() - 1);
-      const yesterdayKey = `${yesterday.getUTCFullYear()}-${pad(
-        yesterday.getUTCMonth() + 1
-      )}-${pad(yesterday.getUTCDate())}`;
-      newStreak = prev === yesterdayKey ? (profile.streakDays || 0) + 1 : 1;
-    }
-
-    const bonusXp = 60 + Math.min(140, newStreak * 12);
-    const giveLife = newStreak % 3 === 0;
-
-    let next: Profile = { ...profile, streakDays: newStreak, lastPlayDateKey: today };
-    next = this.awardXp(next, bonusXp);
-    next = this.unlockSkins(next);
-
-    let nextAttempts = attemptsLeft;
-    if (giveLife && !practice) {
-      nextAttempts = clamp(attemptsLeft + 1, 0, DAILY_ATTEMPTS + 1);
-      try {
-        localStorage.setItem(STORAGE_ATTEMPTS, JSON.stringify({ dateKey: today, left: nextAttempts }));
-      } catch {}
-      return {
-        profile: next,
-        attemptsLeft: nextAttempts,
-        message: `Daily reward: +${bonusXp} XP & +1 life (Streak ${newStreak})`,
-      };
-    }
-    return { profile: next, attemptsLeft: nextAttempts, message: `Daily reward: +${bonusXp} XP (Streak ${newStreak})` };
-  }
-
-  awardXp(profile: Profile, amount: number) {
-    const xp = profile.xp + amount;
-    const lvl = computePlayerLevel(xp);
-    return { ...profile, xp, playerLevel: lvl };
-  }
-
-  unlockSkins(profile: Profile) {
-    const unlocks = new Set<SkinId>(profile.unlockedSkins ?? ["neon"]);
-    (Object.keys(SKINS) as SkinId[]).forEach((sid) => {
-      if (profile.playerLevel >= SKINS[sid].unlockLevel) unlocks.add(sid);
-    });
-    const selected = unlocks.has(profile.selectedSkin) ? profile.selectedSkin : "neon";
-    return { ...profile, unlockedSkins: Array.from(unlocks), selectedSkin: selected };
-  }
-}
-
-/* =======================
-   STORE
-   ======================= */
-class StorageStore {
-  loadMuted(): boolean {
-    return localStorage.getItem(STORAGE_MUTED) === "1";
-  }
-  saveMuted(m: boolean) {
-    localStorage.setItem(STORAGE_MUTED, m ? "1" : "0");
-  }
-
-  loadAttempts(): { dateKey: string; left: number } {
-    const today = getIstanbulDateKey();
-    const raw = safeJsonParse<{ dateKey?: string; left?: number }>(localStorage.getItem(STORAGE_ATTEMPTS), {});
-    if (raw.dateKey === today && typeof raw.left === "number")
-      return { dateKey: today, left: clamp(raw.left, 0, DAILY_ATTEMPTS + 1) };
-    const next = { dateKey: today, left: DAILY_ATTEMPTS };
-    localStorage.setItem(STORAGE_ATTEMPTS, JSON.stringify(next));
-    return next;
-  }
-  saveAttempts(dateKey: string, left: number) {
-    localStorage.setItem(STORAGE_ATTEMPTS, JSON.stringify({ dateKey, left }));
-  }
-
-  loadProfile(): Profile {
-    const p = safeJsonParse<Profile | null>(localStorage.getItem(STORAGE_PROFILE), null);
-    if (!p) {
-      const np: Profile = {
-        playerId: uid(),
-        xp: 0,
-        playerLevel: 1,
-        bestScoreAllTime: 0,
-        streakDays: 0,
-        lastPlayDateKey: "",
-        unlockedSkins: ["neon"],
-        selectedSkin: "neon",
-      };
-      localStorage.setItem(STORAGE_PROFILE, JSON.stringify(np));
-      return np;
-    }
-    const lvl = computePlayerLevel(p.xp);
-    let fixed: Profile = { ...p, playerLevel: lvl };
-    const unlocks = new Set<SkinId>(fixed.unlockedSkins ?? ["neon"]);
-    (Object.keys(SKINS) as SkinId[]).forEach((sid) => {
-      if (lvl >= SKINS[sid].unlockLevel) unlocks.add(sid);
-    });
-    fixed = {
-      ...fixed,
-      unlockedSkins: Array.from(unlocks),
-      selectedSkin: unlocks.has(fixed.selectedSkin) ? fixed.selectedSkin : "neon",
-    };
-    localStorage.setItem(STORAGE_PROFILE, JSON.stringify(fixed));
-    return fixed;
-  }
-  saveProfile(p: Profile) {
-    localStorage.setItem(STORAGE_PROFILE, JSON.stringify(p));
-  }
-}
-
-/* =======================
-   ENGINE
-   ======================= */
-type EngineEvents =
-  | { type: "score"; score: number }
-  | { type: "state"; state: GameState }
-  | { type: "toast"; message: string }
-  | { type: "win"; score: number; level: number; perfect: boolean; boss: boolean }
-  | { type: "lose"; score: number; level: number };
-
-type EngineCallbacks = (e: EngineEvents) => void;
-
-class GameEngine {
-  canvas: HTMLCanvasElement | null = null;
-  ctx: CanvasRenderingContext2D | null = null;
-
-  dpr = 1;
-  cw = 420;
-  ch = 640;
-
-  input = { left: false, right: false, pointerActive: false };
-
-  state: GameState = "idle";
-  level = 1;
-  score = 0;
-
-  perfectEligible = true;
-
-  trail: { x: number; y: number; a: number }[] = [];
-  particles: Particle[] = [];
-  floatTexts: FloatText[] = [];
-  shake = 0;
-  shakeDecay = 0.88;
-
-  paddleX = 0;
-  paddleY = 0;
-  paddleW = 96;
-  paddleH = 14;
-  paddleSpeed = 7;
-
-  ballX = 0;
-  ballY = 0;
-  ballR = 7;
-  ballVX = 3.2;
-  ballVY = -4.6;
-
-  bricks: Brick[] = [];
-  bricksRemaining = 0;
-  totalBricks = 0;
-
-  combo = 0;
-  lastHitAt = 0;
-
-  speedMul = 1;
-
-  powerUps: PowerUp[] = [];
-  slowMul = 1;
-  effectUntil = { wide: 0, slow: 0, fire: 0, magnet: 0 };
-  fireball = false;
-  magnet = false;
-  stuckToPaddle = false;
-
-  almostModeUntil = 0;
-
-  skin = SKINS.neon.vars;
-
-  sfx = {
-    hit: () => {},
-    brick: () => {},
-    power: () => {},
-    lose: () => {},
-    win: () => {},
+  // --- ZAMAN VE HAFTA HESAPLAMA ---
+  const getUTCWeekString = () => {
+    const d = new Date();
+    const utcTarget = new Date(d.valueOf() + d.getTimezoneOffset() * 60000);
+    utcTarget.setDate(utcTarget.getDate() + 4 - (utcTarget.getDay() || 7));
+    const yearStart = new Date(utcTarget.getFullYear(), 0, 1);
+    const weekNo = Math.ceil((((utcTarget.valueOf() - yearStart.valueOf()) / 86400000) + 1) / 7);
+    return `${utcTarget.getFullYear()}-W${weekNo < 10 ? "0" + weekNo : weekNo}`;
   };
 
-  onEvent: EngineCallbacks;
+  useEffect(() => {
+    setCurrentWeekStr(getUTCWeekString());
+    setClientSessionId(Math.random().toString(36).substring(2, 15));
 
-  constructor(onEvent: EngineCallbacks) {
-    this.onEvent = onEvent;
-  }
+    const timer = setInterval(() => {
+      const now = new Date();
+      const tomorrow = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+      const diff = tomorrow.getTime() - now.getTime();
 
-  bindCanvas(canvas: HTMLCanvasElement, dpr: number, cw: number, ch: number) {
-    this.canvas = canvas;
-    this.ctx = canvas.getContext("2d");
-    this.dpr = dpr;
-    this.cw = cw;
-    this.ch = ch;
-    this.paddleY = ch - 44;
-  }
+      const hours = Math.floor(diff / (1000 * 60 * 60));
+      const mins = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+      const secs = Math.floor((diff % (1000 * 60)) / 1000);
 
-  setSkin(vars: typeof SKINS.neon.vars) {
-    this.skin = vars;
-  }
+      setCountdownStr(
+        `${hours.toString().padStart(2, "0")}:${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`
+      );
+    }, 1000);
 
-  setLevel(lv: number) {
-    this.level = clamp(lv, 1, MAX_LEVEL);
-    this.perfectEligible = true;
-    this.hardResetWorld(this.level);
-  }
+    return () => clearInterval(timer);
+  }, []);
 
-  setState(state: GameState) {
-    this.state = state;
-    this.onEvent({ type: "state", state });
-  }
+  // --- VERİTABANI VE PROFIL YÜKLEME ---
+  const loadProfileAndLeaderboard = useCallback(async () => {
+    if (!userWallet || userWallet === "Guest") return;
+    const currentWeek = getUTCWeekString();
 
-  start() {
-    if (this.state === "idle") {
-      this.score = 0;
-      this.hardResetWorld(this.level);
-    }
-    this.setState("running");
-  }
+    // 1. Profil veya İstatistik Yükleme
+    const { data: prof } = await supabase
+      .from("player_profiles")
+      .select("*")
+      .eq("wallet_address", userWallet)
+      .single();
 
-  togglePause() {
-    if (this.state === "running") this.setState("paused");
-    else if (this.state === "paused") this.setState("running");
-  }
-
-  resetToIdle() {
-    this.score = 0;
-    this.perfectEligible = true;
-    this.hardResetWorld(this.level);
-    this.setState("idle");
-  }
-
-  hardResetWorld(levelNum: number) {
-    const cw = this.cw;
-    const ch = this.ch;
-
-    this.speedMul = 1 + Math.min(0.85, (levelNum - 1) * 0.1);
-
-    this.slowMul = 1;
-    this.effectUntil = { wide: 0, slow: 0, fire: 0, magnet: 0 };
-    this.fireball = false;
-    this.magnet = false;
-    this.stuckToPaddle = false;
-    this.almostModeUntil = 0;
-
-    this.paddleW = Math.max(86, Math.floor(cw * (0.23 - Math.min(0.06, (levelNum - 1) * 0.01))));
-    this.paddleH = 14;
-    this.paddleX = (cw - this.paddleW) / 2;
-    this.paddleY = ch - 44;
-    this.paddleSpeed = Math.max(6, Math.floor(cw * 0.017));
-
-    this.ballR = Math.max(6, Math.floor(cw * 0.016));
-    this.ballX = cw / 2;
-    this.ballY = ch - 72;
-
-    const baseVX = cw * 0.008;
-    const baseVY = -ch * 0.0085;
-    this.ballVX = baseVX * this.speedMul;
-    this.ballVY = baseVY * this.speedMul;
-
-    this.trail = [];
-    this.particles = [];
-    this.floatTexts = [];
-    this.shake = 0;
-    this.combo = 0;
-    this.lastHitAt = 0;
-
-    this.powerUps = [];
-
-    this.makeBricks(levelNum);
-  }
-
-  makeBricks(levelNum: number) {
-    if (isBossLevel(levelNum)) {
-      const bw = Math.floor(this.cw * 0.72);
-      const bh = 26;
-      const bx = (this.cw - bw) / 2;
-      const by = 92;
-      const hp = 10 + Math.floor(levelNum * 1.2);
-      const hue = (280 + levelNum * 9) % 360;
-      this.bricks = [{ x: bx, y: by, w: bw, h: bh, alive: true, hp, hue, isBoss: true }];
-      this.bricksRemaining = 1;
-      this.totalBricks = 1;
-      return;
+    if (prof) {
+      setPlayerLv(prof.level || 1);
+      setPlayerXp(prof.xp || 0);
+      setStreak(prof.streak || 0);
+    } else {
+      await supabase.from("player_profiles").insert([{ wallet_address: userWallet, level: 1, xp: 0, streak: 0 }]);
     }
 
-    const padding = 12;
-    const top = 76;
-    const baseCols = 8;
-    const cols = clamp(baseCols + (levelNum >= 3 ? 1 : 0), 6, 10);
-    const rows = clamp(5 + (levelNum >= 2 ? 1 : 0) + (levelNum >= 7 ? 1 : 0), 4, 7);
+    // 2. Günlük Hak Kontrolü
+    const todayStr = new Date().toISOString().split("T")[0];
+    const { data: att } = await supabase
+      .from("player_attempts")
+      .select("*")
+      .eq("wallet_address", userWallet)
+      .eq("date_str", todayStr)
+      .single();
 
-    const gap = 8;
-    const usableW = this.cw - padding * 2;
-    const brickW = Math.floor((usableW - gap * (cols - 1)) / cols);
-    const brickH = 18;
+    if (att) {
+      setAttemptsLeft(Math.max(0, 3 - att.count));
+    } else {
+      setAttemptsLeft(3);
+    }
 
-    const bricks: Brick[] = [];
-    let aliveCount = 0;
+    // 3. Liderlik Tablosu Yükleme
+    const { data: lb } = await supabase
+      .from("brick_breaker_scores")
+      .select("*")
+      .eq("week_str", currentWeek)
+      .order("score", { ascending: false })
+      .limit(10);
+
+    if (lb) {
+      setLeaderboard(lb);
+      const myIndex = lb.findIndex((r) => r.wallet_address === userWallet);
+      setWeeklyRank(myIndex !== -1 ? myIndex + 1 : "10+");
+    }
+  }, [userWallet]);
+
+  useEffect(() => {
+    loadProfileAndLeaderboard();
+  }, [loadProfileAndLeaderboard]);
+
+  // --- PARÇACIK EFEKTİ (PARTICLES) ---
+  const createBrickExplosion = (bx: number, by: number, color: string) => {
+    for (let i = 0; i < 8; i++) {
+      particlesRef.current.push({
+        x: bx + 20,
+        y: by + 10,
+        vx: (Math.random() - 0.5) * 4,
+        vy: (Math.random() - 0.5) * 4,
+        alpha: 1,
+        color: color,
+        size: Math.random() * 3 + 2,
+      });
+    }
+  };
+
+  // --- TUĞLA OLUŞTURMA ALGORİTMASI ---
+  const generateBricks = (lvl: number) => {
+    const rows = 4 + Math.min(lvl, 3);
+    const cols = 6;
+    const padding = 6;
+    const offsetTop = 40;
+    const offsetLeft = 12;
+    const bWidth = (FIXED_WIDTH - offsetLeft * 2 - padding * (cols - 1)) / cols;
+    const bHeight = 16;
+
+    const types: Brick["type"][] = ["normal", "double", "triple", "speed", "slow", "wide", "narrow", "laser", "magnet"];
+    const arr: Brick[] = [];
 
     for (let r = 0; r < rows; r++) {
       for (let c = 0; c < cols; c++) {
-        let alive = true;
-        if (levelNum === 2 && (r + c) % 5 === 0) alive = false;
-        if (levelNum >= 4 && (c - r + cols) % 7 === 0) alive = false;
-        if (!alive) continue;
+        let t: Brick["type"] = "normal";
+        let rand = Math.random();
 
-        const hp = levelNum >= 3 && (r + c) % 4 === 0 ? 2 : 1;
-        const hue = (210 + (r * 18 + c * 9) + levelNum * 13) % 360;
+        if (rand > 0.6) {
+          t = types[Math.floor(Math.random() * types.length)];
+        }
 
-        bricks.push({
-          x: padding + c * (brickW + gap),
-          y: top + r * (brickH + gap),
-          w: brickW,
-          h: brickH,
-          alive: true,
-          hp,
-          hue,
+        let hp = 1;
+        let color = "#3b82f6"; // Mavi
+
+        if (t === "double") { hp = 2; color = "#a855f7"; } // Mor
+        if (t === "triple") { hp = 3; color = "#ef4444"; } // Kırmızı
+        if (t === "speed") color = "#eab308";  // Sarı
+        if (t === "slow") color = "#06b6d4";   // Turkuaz
+        if (t === "wide") color = "#10b981";   // Yeşil
+        if (t === "narrow") color = "#f97316"; // Turuncu
+        if (t === "laser") color = "#ec4899";  // Pembe
+        if (t === "magnet") color = "#6366f1"; // İndigo
+
+        arr.push({
+          x: c * (bWidth + padding) + offsetLeft,
+          y: r * (bHeight + padding) + offsetTop,
+          width: bWidth,
+          height: bHeight,
+          status: hp,
+          type: t,
+          color: color,
         });
-        aliveCount++;
       }
     }
-
-    this.bricks = bricks;
-    this.bricksRemaining = aliveCount;
-    this.totalBricks = aliveCount;
-  }
-
-  movePaddleTo(x: number) {
-    const target = x - this.paddleW / 2;
-    this.paddleX = clamp(target, 0, this.cw - this.paddleW);
-  }
-
-  maybeDropPowerUp(x: number, y: number) {
-    if (Math.random() > POWERUP_DROP_CHANCE) return;
-    const types: PowerUpType[] = ["wide", "slow", "fire", "magnet"];
-    const type = types[Math.floor(Math.random() * types.length)];
-    this.powerUps.push({ id: uid(), type, x, y, r: 10, vy: POWERUP_FALL_SPEED });
-  }
-
-  applyPowerUp(type: PowerUpType) {
-    const now = performance.now();
-
-    if (type === "wide") {
-      this.effectUntil.wide = now + EFFECT_WIDE_MS;
-      this.paddleW = Math.min(this.cw * 0.42, this.paddleW * 1.35);
-      this.onEvent({ type: "toast", message: "Power-Up: Wide Paddle" });
-    }
-    if (type === "slow") {
-      this.effectUntil.slow = now + EFFECT_SLOW_MS;
-      this.slowMul = 0.72;
-      this.onEvent({ type: "toast", message: "Power-Up: Slow-Mo" });
-    }
-    if (type === "fire") {
-      this.effectUntil.fire = now + EFFECT_FIRE_MS;
-      this.fireball = true;
-      this.onEvent({ type: "toast", message: "Power-Up: Fireball" });
-    }
-    if (type === "magnet") {
-      this.effectUntil.magnet = now + EFFECT_MAGNET_MS;
-      this.magnet = true;
-      this.onEvent({ type: "toast", message: "Power-Up: Magnet (tap to release)" });
-    }
-    this.sfx.power();
-  }
-
-  updateEffectsTimers() {
-    const now = performance.now();
-    if (this.effectUntil.wide && now > this.effectUntil.wide) {
-      this.effectUntil.wide = 0;
-      this.paddleW = Math.max(86, Math.floor(this.cw * 0.23));
-    }
-    if (this.effectUntil.slow && now > this.effectUntil.slow) {
-      this.effectUntil.slow = 0;
-      this.slowMul = 1;
-    }
-    if (this.effectUntil.fire && now > this.effectUntil.fire) {
-      this.effectUntil.fire = 0;
-      this.fireball = false;
-    }
-    if (this.effectUntil.magnet && now > this.effectUntil.magnet) {
-      this.effectUntil.magnet = 0;
-      this.magnet = false;
-      this.stuckToPaddle = false;
-    }
-  }
-
-  releaseBallFromMagnet() {
-    if (!this.stuckToPaddle) return;
-    this.stuckToPaddle = false;
-    const t = (this.ballX - (this.paddleX + this.paddleW / 2)) / (this.paddleW / 2);
-    const max = this.cw * 0.014 * this.speedMul;
-    this.ballVX = clamp(this.ballVX + t * (this.cw * 0.004), -max, max);
-    this.ballVY = -Math.abs(this.ballVY || this.ch * 0.008);
-    this.sfx.hit();
-  }
-
-  addParticles(x: number, y: number, hue: number, power: number) {
-    const n = Math.floor(10 + power * 10);
-    for (let i = 0; i < n; i++) {
-      const a = Math.random() * Math.PI * 2;
-      const sp = (0.8 + Math.random() * 2.2) * power;
-      this.particles.push({
-        x,
-        y,
-        vx: Math.cos(a) * sp,
-        vy: Math.sin(a) * sp,
-        life: 0,
-        max: 18 + Math.random() * 18,
-        size: 1.2 + Math.random() * 2.2,
-        hue,
-      });
-    }
-  }
-
-  addFloatText(x: number, y: number, text: string) {
-    this.floatTexts.push({ x, y, vy: -0.7 - Math.random() * 0.5, life: 0, max: 28, text });
-  }
-
-  bumpShake(amount: number) {
-    this.shake = Math.min(18, this.shake + amount);
-  }
-
-  step(ts: number) {
-    if (this.state !== "running") return;
-
-    this.updateEffectsTimers();
-
-    // paddle keyboard
-    if (!this.input.pointerActive) {
-      if (this.input.left) this.paddleX -= this.paddleSpeed;
-      if (this.input.right) this.paddleX += this.paddleSpeed;
-      this.paddleX = clamp(this.paddleX, 0, this.cw - this.paddleW);
-    }
-
-    // magnet stick
-    if (this.magnet && this.stuckToPaddle) {
-      this.ballX = clamp(this.paddleX + this.paddleW / 2, this.ballR, this.cw - this.ballR);
-      this.ballY = this.paddleY - this.ballR - 1;
-    } else {
-      this.ballX += this.ballVX * this.slowMul;
-      this.ballY += this.ballVY * this.slowMul;
-    }
-
-    // trail
-    this.trail.push({ x: this.ballX, y: this.ballY, a: 1 });
-    if (this.trail.length > 18) this.trail.shift();
-    for (const t of this.trail) t.a *= 0.9;
-
-    // particles
-    for (let i = this.particles.length - 1; i >= 0; i--) {
-      const p = this.particles[i];
-      p.life += 1;
-      p.x += p.vx;
-      p.y += p.vy;
-      p.vx *= 0.98;
-      p.vy = p.vy * 0.98 + 0.05;
-      if (p.life >= p.max) this.particles.splice(i, 1);
-    }
-
-    // float texts
-    for (let i = this.floatTexts.length - 1; i >= 0; i--) {
-      const ft = this.floatTexts[i];
-      ft.life += 1;
-      ft.y += ft.vy;
-      if (ft.life >= ft.max) this.floatTexts.splice(i, 1);
-    }
-
-    // shake
-    this.shake *= this.shakeDecay;
-    if (this.shake < 0.1) this.shake = 0;
-
-    // walls
-    if (this.ballX - this.ballR <= 0) {
-      this.ballX = this.ballR;
-      this.ballVX *= -1;
-      this.sfx.hit();
-      this.bumpShake(0.7);
-    }
-    if (this.ballX + this.ballR >= this.cw) {
-      this.ballX = this.cw - this.ballR;
-      this.ballVX *= -1;
-      this.sfx.hit();
-      this.bumpShake(0.7);
-    }
-    if (this.ballY - this.ballR <= 0) {
-      this.ballY = this.ballR;
-      this.ballVY *= -1;
-      this.sfx.hit();
-      this.bumpShake(0.7);
-    }
-
-    // paddle collision
-    const px1 = this.paddleX;
-    const px2 = this.paddleX + this.paddleW;
-    const py1 = this.paddleY;
-    const py2 = this.paddleY + this.paddleH;
-
-    const bx = this.ballX;
-    const by = this.ballY;
-
-    const hitPaddle =
-      bx >= px1 - this.ballR &&
-      bx <= px2 + this.ballR &&
-      by + this.ballR >= py1 &&
-      by + this.ballR <= py2 + 7 &&
-      this.ballVY > 0;
-
-    if (hitPaddle) {
-      if (this.magnet) {
-        this.stuckToPaddle = true;
-        this.sfx.hit();
-      } else {
-        this.ballY = py1 - this.ballR - 0.5;
-        this.ballVY *= -1;
-        this.sfx.hit();
-      }
-      this.bumpShake(1.2);
-
-      const t = (bx - (px1 + this.paddleW / 2)) / (this.paddleW / 2);
-      const max = this.cw * 0.014 * this.speedMul;
-      const add = t * (this.cw * 0.004);
-      this.ballVX = clamp(this.ballVX + add, -max, max);
-
-      if (this.level >= 3 && !this.stuckToPaddle) {
-        this.ballVX *= 1.004;
-        this.ballVY *= 1.004;
-      }
-    }
-
-    // powerups
-    for (let i = this.powerUps.length - 1; i >= 0; i--) {
-      const pu = this.powerUps[i];
-      pu.y += pu.vy;
-
-      const caught =
-        pu.x >= this.paddleX - pu.r &&
-        pu.x <= this.paddleX + this.paddleW + pu.r &&
-        pu.y + pu.r >= this.paddleY &&
-        pu.y - pu.r <= this.paddleY + this.paddleH;
-
-      if (caught) {
-        this.powerUps.splice(i, 1);
-        this.applyPowerUp(pu.type);
-        continue;
-      }
-      if (pu.y - pu.r > this.ch) this.powerUps.splice(i, 1);
-    }
-
-    // brick collision
-    for (let i = 0; i < this.bricks.length; i++) {
-      const br = this.bricks[i];
-      if (!br.alive) continue;
-
-      const withinX = bx >= br.x - this.ballR && bx <= br.x + br.w + this.ballR;
-      const withinY = by >= br.y - this.ballR && by <= br.y + br.h + this.ballR;
-      if (!withinX || !withinY) continue;
-
-      if (!this.fireball) {
-        const cx = clamp(bx, br.x, br.x + br.w);
-        const cy = clamp(by, br.y, br.y + br.h);
-        const dx = bx - cx;
-        const dy = by - cy;
-        if (Math.abs(dx) > Math.abs(dy)) this.ballVX *= -1;
-        else this.ballVY *= -1;
-      }
-
-      const now = ts || performance.now();
-      if (now - this.lastHitAt < 1200) this.combo += 1;
-      else this.combo = 1;
-      this.lastHitAt = now;
-
-      br.hp -= 1;
-      this.sfx.brick();
-
-      const power = br.hp <= 0 ? 1.15 : 0.75;
-      this.addParticles(bx, by, br.hue, power);
-      this.bumpShake(br.hp <= 0 ? 3.2 : 1.6);
-
-      if (br.hp <= 0) {
-        br.alive = false;
-        if (br.isBoss) this.bricksRemaining = 0;
-        else this.bricksRemaining -= 1;
-
-        const base = br.isBoss ? 120 : 10;
-        const comboBonus = Math.min(30, (this.combo - 1) * 3);
-        const gained = base + comboBonus;
-
-        this.score += gained;
-        this.onEvent({ type: "score", score: this.score });
-        this.addFloatText(bx, by, `+${gained}`);
-
-        if (!br.isBoss) this.maybeDropPowerUp(bx, by);
-      } else {
-        const gained = br.isBoss ? 8 : 3;
-        this.score += gained;
-        this.onEvent({ type: "score", score: this.score });
-        this.addFloatText(bx, by, `+${gained}`);
-      }
-
-      if (this.bricksRemaining <= 0) {
-        const perfect = this.perfectEligible;
-        this.setState("win");
-        this.sfx.win();
-        this.onEvent({
-          type: "win",
-          score: this.score,
-          level: this.level,
-          perfect,
-          boss: isBossLevel(this.level),
-        });
-        return;
-      }
-
-      break;
-    }
-
-    // lose
-    if (this.ballY - this.ballR > this.ch) {
-      this.perfectEligible = false;
-      this.setState("gameover");
-      this.sfx.lose();
-      this.onEvent({ type: "lose", score: this.score, level: this.level });
-      return;
-    }
-  }
-
-  private rr(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
-    const rr = Math.min(r, w / 2, h / 2);
-    ctx.beginPath();
-    ctx.moveTo(x + rr, y);
-    ctx.arcTo(x + w, y, x + w, y + h, rr);
-    ctx.arcTo(x + w, y + h, x, y + h, rr);
-    ctx.arcTo(x, y + h, x, y, rr);
-    ctx.arcTo(x, y, x + w, y, rr);
-    ctx.closePath();
-  }
-
-  draw() {
-    const ctx = this.ctx;
-    if (!ctx) return;
-
-    ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
-
-    const bg = ctx.createLinearGradient(0, 0, this.cw, this.ch);
-    bg.addColorStop(0, "#070A14");
-    bg.addColorStop(0.55, "#070A12");
-    bg.addColorStop(1, "#04050B");
-    ctx.fillStyle = bg;
-    ctx.fillRect(-50, -50, this.cw + 100, this.ch + 100);
-
-    // grid
-    ctx.globalAlpha = 0.07;
-    ctx.strokeStyle = "rgba(139,92,246,0.9)";
-    ctx.lineWidth = 1;
-    const grid = 26;
-    for (let x = 0; x <= this.cw; x += grid) {
-      ctx.beginPath();
-      ctx.moveTo(x, 0);
-      ctx.lineTo(x, this.ch);
-      ctx.stroke();
-    }
-    for (let y = 0; y <= this.ch; y += grid) {
-      ctx.beginPath();
-      ctx.moveTo(0, y);
-      ctx.lineTo(this.cw, y);
-      ctx.stroke();
-    }
-    ctx.globalAlpha = 1;
-
-    // frame
-    ctx.save();
-    ctx.globalAlpha = 0.9;
-    ctx.shadowBlur = 18;
-    ctx.shadowColor = this.skin.glow;
-    ctx.strokeStyle = "rgba(255,255,255,0.14)";
-    ctx.lineWidth = 2;
-    this.rr(ctx, 10, 10, this.cw - 20, this.ch - 20, 22);
-    ctx.stroke();
-    ctx.restore();
-
-    // bricks
-    for (const br of this.bricks) {
-      if (!br.alive) continue;
-      const g = ctx.createLinearGradient(br.x, br.y, br.x + br.w, br.y + br.h);
-      const hi = br.isBoss ? 70 : br.hp > 1 ? 62 : 58;
-      const lo = br.isBoss ? 56 : br.hp > 1 ? 50 : 46;
-      g.addColorStop(0, `hsla(${br.hue}, 92%, ${hi}%, 0.96)`);
-      g.addColorStop(1, `hsla(${(br.hue + 40) % 360}, 92%, ${lo}%, 0.96)`);
-
-      ctx.save();
-      ctx.shadowBlur = br.isBoss ? 18 : 10;
-      ctx.shadowColor = `hsla(${br.hue}, 90%, 60%, ${br.isBoss ? 0.5 : 0.35})`;
-      ctx.fillStyle = g;
-      this.rr(ctx, br.x, br.y, br.w, br.h, br.isBoss ? 14 : 8);
-      ctx.fill();
-
-      ctx.globalAlpha = 0.18;
-      ctx.fillStyle = "#fff";
-      this.rr(ctx, br.x + 3, br.y + 3, br.w - 6, 5, 6);
-      ctx.fill();
-
-      if (br.hp > 1) {
-        ctx.globalAlpha = 0.92;
-        ctx.fillStyle = "rgba(0,0,0,0.35)";
-        this.rr(ctx, br.x + br.w - 44, br.y + 5, 38, 16, 8);
-        ctx.fill();
-        ctx.fillStyle = "rgba(255,255,255,0.9)";
-        ctx.font = "11px ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto";
-        ctx.textAlign = "center";
-        ctx.textBaseline = "middle";
-        ctx.fillText(String(br.hp), br.x + br.w - 25, br.y + 13);
-      }
-
-      ctx.restore();
-      ctx.globalAlpha = 1;
-    }
-
-    // powerups
-    for (const pu of this.powerUps) {
-      ctx.save();
-      ctx.shadowBlur = 16;
-      ctx.shadowColor = "rgba(255,255,255,0.18)";
-      ctx.fillStyle = "rgba(255,255,255,0.10)";
-      ctx.beginPath();
-      ctx.arc(pu.x, pu.y, pu.r + 2, 0, Math.PI * 2);
-      ctx.fill();
-
-      ctx.fillStyle = "rgba(0,0,0,0.35)";
-      ctx.beginPath();
-      ctx.arc(pu.x, pu.y, pu.r, 0, Math.PI * 2);
-      ctx.fill();
-
-      ctx.globalAlpha = 0.95;
-      ctx.font = "14px ui-sans-serif, system-ui";
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.fillStyle = "rgba(255,255,255,0.92)";
-      ctx.fillText(POWER_ICON[pu.type], pu.x, pu.y + 0.5);
-      ctx.restore();
-    }
-
-    // paddle
-    const px = this.paddleX;
-    const py = this.paddleY;
-    const pg = ctx.createLinearGradient(px, py, px + this.paddleW, py);
-    pg.addColorStop(0, this.skin.a);
-    pg.addColorStop(0.5, this.skin.b);
-    pg.addColorStop(1, this.skin.c);
-
-    ctx.save();
-    ctx.shadowBlur = 18;
-    ctx.shadowColor = this.skin.glow;
-    ctx.fillStyle = pg;
-    this.rr(ctx, px, py, this.paddleW, this.paddleH, 10);
-    ctx.fill();
-    ctx.restore();
-
-    // ball
-    ctx.save();
-    ctx.shadowBlur = this.fireball ? 26 : 18;
-    ctx.shadowColor = this.fireball ? "rgba(245,158,11,0.35)" : this.skin.glow;
-    const brad = ctx.createRadialGradient(
-      this.ballX - 2,
-      this.ballY - 2,
-      2,
-      this.ballX,
-      this.ballY,
-      this.ballR * 2.2
-    );
-    brad.addColorStop(0, "rgba(255,255,255,0.96)");
-    brad.addColorStop(0.5, this.fireball ? "rgba(245,158,11,0.75)" : "rgba(34,211,238,0.78)");
-    brad.addColorStop(1, "rgba(139,92,246,0.0)");
-    ctx.fillStyle = brad;
-    ctx.beginPath();
-    ctx.arc(this.ballX, this.ballY, this.ballR, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.restore();
-
-    // particles
-    for (const p of this.particles) {
-      const t = 1 - p.life / p.max;
-      ctx.globalAlpha = Math.max(0, t);
-      ctx.fillStyle = `hsla(${p.hue}, 95%, 60%, ${0.9 * t})`;
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
-      ctx.fill();
-    }
-    ctx.globalAlpha = 1;
-  }
-}
-
-/* =======================
-   SFX (WebAudio) — no any
-   ======================= */
-type AudioContextCtor = new () => AudioContext;
-declare global {
-  interface Window {
-    webkitAudioContext?: AudioContextCtor;
-  }
-}
-
-function createSfx(getMuted: () => boolean) {
-  const audioRef = { current: null as AudioContext | null };
-
-  function ensureAudio() {
-    if (getMuted()) return null;
-    if (!audioRef.current) {
-      try {
-        const Ctx: AudioContextCtor | undefined = window.AudioContext ?? window.webkitAudioContext;
-        audioRef.current = Ctx ? new Ctx() : null;
-      } catch {
-        audioRef.current = null;
-      }
-    }
-    return audioRef.current;
-  }
-
-  function beep(freq: number, durMs: number, type: OscillatorType, gainVal: number) {
-    const ac = ensureAudio();
-    if (!ac) return;
-    if (ac.state === "suspended") ac.resume().catch(() => {});
-    const o = ac.createOscillator();
-    const g = ac.createGain();
-    o.type = type;
-    o.frequency.value = freq;
-
-    const now = ac.currentTime;
-    g.gain.setValueAtTime(0.0001, now);
-    g.gain.exponentialRampToValueAtTime(gainVal, now + 0.01);
-    g.gain.exponentialRampToValueAtTime(0.0001, now + durMs / 1000);
-
-    o.connect(g);
-    g.connect(ac.destination);
-    o.start();
-    o.stop(now + durMs / 1000 + 0.02);
-  }
-
-  return {
-    hit: () => beep(520, 55, "square", 0.08),
-    brick: () => beep(760, 70, "triangle", 0.095),
-    power: () => beep(980, 90, "triangle", 0.09),
-    lose: () => beep(180, 240, "sawtooth", 0.065),
-    win: () => {
-      beep(660, 90, "triangle", 0.08);
-      setTimeout(() => beep(880, 120, "triangle", 0.08), 90);
-    },
+    bricksRef.current = arr;
   };
-}
 
-/* =======================
-   UI
-   ======================= */
-export default function BrickBreakerMiniApp() {
-  const storeRef = useRef<StorageStore | null>(null);
-  const analyticsRef = useRef<AnalyticsAdapter | null>(null);
-  const rewardsRef = useRef<RewardsAdapter | null>(null);
-  const leaderboardRef = useRef<LeaderboardAdapter | null>(null);
+  // --- SKOR KAYDETME VE SEVİYE ATLAMA ---
+  const saveTournamentScore = async (finalScore: number) => {
+    if (!userWallet || userWallet === "Guest" || gameModeRef.current !== "tournament") return;
+    const todayStr = new Date().toISOString().split("T")[0];
+    const currentWeek = getUTCWeekString();
 
-  const engineRef = useRef<GameEngine | null>(null);
-  const rafRef = useRef<number | null>(null);
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+    try {
+      // Hak Düşürme İşlemi
+      const { data: att } = await supabase
+        .from("player_attempts")
+        .select("*")
+        .eq("wallet_address", userWallet)
+        .eq("date_str", todayStr)
+        .single();
 
-  const [mounted, setMounted] = useState(false);
-  const [muted, setMuted] = useState(false);
-  const [practiceMode, setPracticeMode] = useState(false);
-  const [attemptsLeft, setAttemptsLeft] = useState(DAILY_ATTEMPTS);
-
-  // hydration-safe
-  const [dateKey, setDateKey] = useState<string>("");
-  const [countdownSec, setCountdownSec] = useState<number>(0);
-
-  const [profile, setProfile] = useState<Profile | null>(null);
-  const [weekly, setWeekly] = useState<WeeklyState | null>(null);
-
-  const [toast, setToast] = useState<string | null>(null);
-
-  const [gameState, setGameState] = useState<GameState>("idle");
-  const [score, setScore] = useState(0);
-  const [level, setLevel] = useState(1);
-
-  const [perfectRun, setPerfectRun] = useState(false);
-
-  const runConsumedAttemptRef = useRef(false);
-
-  const [challenge, setChallenge] = useState<Challenge>({
-    active: false,
-    targetScore: 0,
-    targetLevel: 0,
-    weekKey: "",
-  });
-
-  const [shareCopied, setShareCopied] = useState(false);
-
-  const lockedOut = !practiceMode && attemptsLeft <= 0;
-
-  const skinVars = useMemo(() => {
-    const sid = profile?.selectedSkin ?? "neon";
-    return SKINS[sid].vars;
-  }, [profile?.selectedSkin]);
-
-  const toastOnce = useCallback((msg: string) => {
-    setToast(msg);
-    window.setTimeout(() => setToast(null), 2400);
-  }, []);
-
-  const canStart = useCallback(() => {
-    return practiceMode || attemptsLeft > 0;
-  }, [practiceMode, attemptsLeft]);
-
-  const consumeAttemptOnce = useCallback(() => {
-    if (practiceMode) return;
-    if (runConsumedAttemptRef.current) return;
-    runConsumedAttemptRef.current = true;
-
-    const store = storeRef.current!;
-    const today = getIstanbulDateKey();
-
-    setAttemptsLeft((prev) => {
-      const next = Math.max(0, prev - 1);
-      store.saveAttempts(today, next);
-      return next;
-    });
-  }, [practiceMode]);
-
-  const startGame = useCallback(() => {
-    if (!canStart()) return;
-
-    const engine = engineRef.current!;
-    runConsumedAttemptRef.current = false;
-
-    engine.setLevel(level);
-    engine.start();
-
-    analyticsRef.current?.track("start", {
-      level,
-      mode: practiceMode ? "practice" : "daily",
-      challenge: challenge.active,
-    });
-  }, [canStart, level, practiceMode, challenge.active]);
-
-  const togglePause = useCallback(() => {
-    engineRef.current?.togglePause();
-  }, []);
-
-  const resetToIdle = useCallback(
-    (resetLevelTo1: boolean) => {
-      const engine = engineRef.current!;
-      runConsumedAttemptRef.current = false;
-      setPerfectRun(false);
-
-      if (resetLevelTo1) {
-        setLevel(1);
-        engine.setLevel(1);
-        engine.resetToIdle();
+      if (att) {
+        await supabase.from("player_attempts").update({ count: att.count + 1 }).eq("id", att.id);
       } else {
-        engine.resetToIdle();
+        await supabase.from("player_attempts").insert([{ wallet_address: userWallet, date_str: todayStr, count: 1 }]);
       }
-    },
-    []
-  );
 
-  const nextLevel = useCallback(() => {
-    const nl = Math.min(MAX_LEVEL, level + 1);
-    setLevel(nl);
+      // Skoru Veritabanına Yazma
+      await supabase.from("brick_breaker_scores").insert([
+        {
+          wallet_address: userWallet,
+          score: finalScore,
+          level_reached: levelRef.current,
+          week_str: currentWeek,
+          session_id: clientSessionId,
+          verification_log: actionLog,
+        },
+      ]);
+
+      // XP ve Profil Güncelleme
+      const gainedXp = finalScore * 2;
+      let newXp = playerXp + gainedXp;
+      let newLv = playerLv;
+      const xpNeeded = playerLv * 500;
+
+      if (newXp >= xpNeeded) {
+        newXp -= xpNeeded;
+        newLv += 1;
+      }
+
+      await supabase
+        .from("player_profiles")
+        .update({ level: newLv, xp: newXp, streak: streak + 1 })
+        .eq("wallet_address", userWallet);
+
+      loadProfileAndLeaderboard();
+    } catch (err) {
+      console.error("Skor kaydedilirken hata oluştu:", err);
+    }
+  };
+
+  // --- OYUNU BAŞLATMA ---
+  const startGame = () => {
+    if (gameMode === "tournament" && attemptsLeft <= 0) {
+      alert("Günlük turnuva hakkınız kalmadı! Antrenman modunda oynayabilirsiniz.");
+      return;
+    }
     setScore(0);
-    setPerfectRun(false);
+    setLevel(1);
+    setLives(4);
+    setActionLog([`start_${gameMode}_${Date.now()}`]);
 
-    const engine = engineRef.current!;
-    runConsumedAttemptRef.current = false;
-    engine.setLevel(nl);
-    engine.start();
-  }, [level]);
+    paddleXRef.current = (FIXED_WIDTH - PADDLE_WIDTH) / 2;
+    paddleWidthRef.current = PADDLE_WIDTH;
 
-  const setSkin = useCallback((id: SkinId) => {
-    setProfile((prev) => {
-      if (!prev) return prev;
-      if (!prev.unlockedSkins.includes(id)) return prev;
-      const next = { ...prev, selectedSkin: id };
-      storeRef.current?.saveProfile(next);
-      return next;
-    });
-    toastOnce(`Skin: ${SKINS[id].name}`);
-  }, [toastOnce]);
+    generateBricks(1);
+    resetBall();
 
-  const shareScore = useCallback(async () => {
-    const url = new URL(window.location.href);
-    url.searchParams.set("bbScore", String(score));
-    url.searchParams.set("bbLv", String(level));
-    url.searchParams.set("bbW", weekly?.weekKey ?? getIstanbulWeekKey());
+    activePowerUpRef.current = null;
+    powerUpTimerRef.current = 0;
+    isMagnetAttachedRef.current = false;
+    lasersRef.current = [];
+    particlesRef.current = [];
 
-    const text = `I scored ${score} on Brick Breaker (LV ${level})! Can you beat me?`;
+    setGameState("playing");
+  };
 
-    if (navigator.share) {
-      try {
-        await navigator.share({ title: "Brick Breaker", text, url: url.toString() });
-        analyticsRef.current?.track("share", { method: "native" });
-        return;
-      } catch {
-        // fall through to clipboard
+  const resetBall = () => {
+    ballXRef.current = FIXED_WIDTH / 2;
+    ballYRef.current = FIXED_HEIGHT - 35;
+    ballVxFRef.current = (Math.random() > 0.5 ? 1 : -1) * (baseSpeedRef.current - 1);
+    ballVyFRef.current = -baseSpeedRef.current;
+    isMagnetAttachedRef.current = false;
+  };
+
+  // --- INPUT / KLAVYE KONTROLLERİ ---
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Right" || e.key === "ArrowRight") rightPressedRef.current = true;
+      if (e.key === "Left" || e.key === "ArrowLeft") leftPressedRef.current = true;
+      if (e.key === " " && isMagnetAttachedRef.current && gameStateRef.current === "playing") {
+        isMagnetAttachedRef.current = false;
+        ballVyFRef.current = -baseSpeedRef.current;
+        ballVxFRef.current = (Math.random() - 0.5) * 4;
       }
-    }
+    };
 
-    try {
-      await navigator.clipboard.writeText(url.toString());
-      setShareCopied(true);
-      window.setTimeout(() => setShareCopied(false), 1600);
-      analyticsRef.current?.track("share", { method: "copy" });
-    } catch {
-      toastOnce("Couldn’t copy link. (Browser permission)");
-    }
-  }, [score, level, weekly?.weekKey, toastOnce]);
+    const handleKeyUp = (e: KeyboardEvent) => {
+      if (e.key === "Right" || e.key === "ArrowRight") rightPressedRef.current = false;
+      if (e.key === "Left" || e.key === "ArrowLeft") leftPressedRef.current = false;
+    };
 
-  /* INIT */
+    window.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("keyup", handleKeyUp);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("keyup", handleKeyUp);
+    };
+  }, []);
+
+  // MOUSE / DOKUNMATIK KONTROLLER
+  const handlePointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    if (gameState !== "playing" || !canvasRef.current) return;
+    const rect = canvasRef.current.getBoundingClientRect();
+    const scaleX = FIXED_WIDTH / rect.width;
+    const clientX = e.clientX;
+    const canvasX = (clientX - rect.left) * scaleX;
+    paddleXRef.current = Math.max(0, Math.min(FIXED_WIDTH - paddleWidthRef.current, canvasX - paddleWidthRef.current / 2));
+  };
+
+  const handlePointerDown = () => {
+    if (gameState === "playing" && isMagnetAttachedRef.current) {
+      isMagnetAttachedRef.current = false;
+      ballVyFRef.current = -baseSpeedRef.current;
+      ballVxFRef.current = (Math.random() - 0.5) * 4;
+    }
+  };
+
+  // --- OYUN DÖNGÜSÜ (GAME LOOP) ---
   useEffect(() => {
-    setMounted(true);
+    let animId: number;
 
-    storeRef.current = new StorageStore();
-    analyticsRef.current = new ConsoleAnalytics();
-    rewardsRef.current = new DefaultRewards();
-    leaderboardRef.current = new LocalLeaderboard();
+    const update = () => {
+      if (gameStateRef.current !== "playing") return;
 
-    const store = storeRef.current;
-    const rewards = rewardsRef.current!;
-    const lb = leaderboardRef.current!;
-
-    setMuted(store.loadMuted());
-
-    setDateKey(getIstanbulDateKey());
-    setCountdownSec(secondsUntilNextIstanbulMidnight());
-
-    const att = store.loadAttempts();
-    setAttemptsLeft(att.left);
-
-    const p0 = store.loadProfile();
-    const wk = getIstanbulWeekKey();
-    const w0 = lb.getWeekly(wk);
-
-    const daily = rewards.applyDailyReward(p0, att.left, false);
-    store.saveProfile(daily.profile);
-    setProfile(daily.profile);
-    setAttemptsLeft(daily.attemptsLeft);
-    setWeekly(w0);
-
-    if (daily.message) toastOnce(daily.message);
-
-    // Challenge link parse
-    try {
-      const url = new URL(window.location.href);
-      const bbScore = Number(url.searchParams.get("bbScore") || "0");
-      const bbLv = Number(url.searchParams.get("bbLv") || "0");
-      const bbW = String(url.searchParams.get("bbW") || wk);
-      if (Number.isFinite(bbScore) && bbScore > 0) {
-        setChallenge({
-          active: true,
-          targetScore: Math.floor(bbScore),
-          targetLevel: Math.max(1, Math.floor(bbLv || 1)),
-          weekKey: bbW,
-        });
-        toastOnce(`Challenge accepted: beat ${Math.floor(bbScore)}!`);
+      // 1. Palet Hareketi
+      if (rightPressedRef.current) {
+        paddleXRef.current = Math.min(FIXED_WIDTH - paddleWidthRef.current, paddleXRef.current + 6);
       }
-    } catch {}
+      if (leftPressedRef.current) {
+        paddleXRef.current = Math.max(0, paddleXRef.current - 6);
+      }
 
-    const t = window.setInterval(() => {
-      setCountdownSec(secondsUntilNextIstanbulMidnight());
-      setDateKey(getIstanbulDateKey());
-      const att2 = store.loadAttempts();
-      setAttemptsLeft(att2.left);
-      const wk2 = getIstanbulWeekKey();
-      setWeekly(lb.getWeekly(wk2));
-    }, 1000);
+      // Magnet Güçlendiricisi Aktifse Topu Palete Kilitle
+      if (isMagnetAttachedRef.current) {
+        ballXRef.current = paddleXRef.current + paddleWidthRef.current / 2;
+        ballYRef.current = FIXED_HEIGHT - PADDLE_HEIGHT - BALL_RADIUS - 4;
+      } else {
+        // Top Hareketi
+        ballXRef.current += ballVxFRef.current;
+        ballYRef.current += ballVyFRef.current;
+      }
 
-    return () => window.clearInterval(t);
-  }, [toastOnce]);
+      // 2. Duvar Çarpmaları
+      if (ballXRef.current + BALL_RADIUS > FIXED_WIDTH || ballXRef.current - BALL_RADIUS < 0) {
+        ballVxFRef.current = -ballVxFRef.current;
+        playAudio("hit");
+      }
+      if (ballYRef.current - BALL_RADIUS < 0) {
+        ballVyFRef.current = -ballVyFRef.current;
+        playAudio("hit");
+      }
 
-  useEffect(() => {
-    storeRef.current?.saveMuted(muted);
-  }, [muted]);
-
-  /* ENGINE create */
-  useEffect(() => {
-    if (!engineRef.current) {
-      engineRef.current = new GameEngine((e) => {
-        if (e.type === "score") setScore(e.score);
-        if (e.type === "state") setGameState(e.state);
-        if (e.type === "toast") toastOnce(e.message);
-
-        if (e.type === "win") {
-          consumeAttemptOnce();
-          setPerfectRun(!practiceMode && e.perfect);
-
-          const store = storeRef.current!;
-          const rewards = rewardsRef.current!;
-          const lb = leaderboardRef.current!;
-          const wk = getIstanbulWeekKey();
-
-          const current = store.loadProfile();
-          const baseXp = e.boss ? 160 : 90;
-          const lvlBonus = Math.min(120, e.level * 10);
-          const perfBonus = !practiceMode && e.perfect ? 80 : 0;
-
-          let next = rewards.awardXp(current, baseXp + lvlBonus + perfBonus);
-          next = rewards.unlockSkins(next);
-          next = { ...next, bestScoreAllTime: Math.max(next.bestScoreAllTime, e.score) };
-          store.saveProfile(next);
-          setProfile(next);
-
-          setWeekly(lb.submitWeekly(wk, { playerId: next.playerId, name: "You", score: e.score, ts: Date.now() }));
+      // 3. Palete Çarpma Kontrolü
+      if (
+        ballVyFRef.current > 0 &&
+        ballYRef.current + BALL_RADIUS >= FIXED_HEIGHT - PADDLE_HEIGHT - 4 &&
+        ballXRef.current >= paddleXRef.current &&
+        ballXRef.current <= paddleXRef.current + paddleWidthRef.current
+      ) {
+        playAudio("hit");
+        if (activePowerUpRef.current === "magnet") {
+          isMagnetAttachedRef.current = true;
+        } else {
+          let hitPoint = ballXRef.current - (paddleXRef.current + paddleWidthRef.current / 2);
+          hitPoint = hitPoint / (paddleWidthRef.current / 2);
+          ballVxFRef.current = hitPoint * baseSpeedRef.current;
+          ballVyFRef.current = -Math.sqrt(Math.max(4, baseSpeedRef.current ** 2 - ballVxFRef.current ** 2));
         }
+      }
 
-        if (e.type === "lose") {
-          consumeAttemptOnce();
+      // 4. Aşağı Düşme (Can Kaybı)
+      if (ballYRef.current - BALL_RADIUS > FIXED_HEIGHT) {
+        playAudio("lose");
+        const nextLives = livesRef.current - 1;
+        setLives(nextLives);
+        if (nextLives <= 0) {
+          setGameState("gameover");
+          saveTournamentScore(scoreRef.current);
+        } else {
+          resetBall();
+        }
+      }
 
-          const store = storeRef.current!;
-          const rewards = rewardsRef.current!;
-          const current = store.loadProfile();
+      // 5. Lazer Ateş Mekanizması
+      if (activePowerUpRef.current === "laser") {
+        powerUpTimerRef.current -= 16.66;
+        if (Math.random() < 0.03) {
+          lasersRef.current.push({ x: paddleXRef.current + 10, y: FIXED_HEIGHT - 20 });
+          lasersRef.current.push({ x: paddleXRef.current + paddleWidthRef.current - 10, y: FIXED_HEIGHT - 20 });
+          playAudio("laser");
+        }
+        if (powerUpTimerRef.current <= 0) activePowerUpRef.current = null;
+      }
 
-          let next = rewards.awardXp(current, 18 + Math.min(20, e.level));
-          next = rewards.unlockSkins(next);
+      // Lazerleri İlerlet ve Tuğla Çarpmalarını Hesapla
+      lasersRef.current = lasersRef.current.filter((l) => {
+        l.y -= 7;
+        let hit = false;
+        bricksRef.current.forEach((b) => {
+          if (b.status > 0 && l.x >= b.x && l.x <= b.x + b.width && l.y >= b.y && l.y <= b.y + b.height) {
+            hit = true;
+            b.status -= 1;
+            setScore((s) => s + 15);
+            createBrickExplosion(b.x, b.y, b.color);
+          }
+        });
+        return !hit && l.y > 0;
+      });
 
-          store.saveProfile(next);
-          setProfile(next);
-          setPerfectRun(false);
+      // 6. Tuğla Çarpmaları (Top İle)
+      let allCleared = true;
+      bricksRef.current.forEach((b, idx) => {
+        if (b.status <= 0) return;
+        allCleared = false;
+
+        if (
+          ballXRef.current + BALL_RADIUS >= b.x &&
+          ballXRef.current - BALL_RADIUS <= b.x + b.width &&
+          ballYRef.current + BALL_RADIUS >= b.y &&
+          ballYRef.current - BALL_RADIUS <= b.y + b.height
+        ) {
+          b.status -= 1;
+          setScore((s) => s + 10);
+          playAudio("brick");
+          createBrickExplosion(b.x, b.y, b.color);
+
+          // Çarpma Açısını Hesapla ve Yön Değiştir
+          const overlapX = Math.min(ballXRef.current + BALL_RADIUS - b.x, b.x + b.width - (ballXRef.current - BALL_RADIUS));
+          const overlapY = Math.min(ballYRef.current + BALL_RADIUS - b.y, b.y + b.height - (ballYRef.current - BALL_RADIUS));
+
+          if (overlapX < overlapY) {
+            ballVxFRef.current = -ballVxFRef.current;
+          } else {
+            ballVyFRef.current = -ballVyFRef.current;
+          }
+
+          // Tuğla Kırılınca Güçlendirici Tetikleme
+          if (b.status === 0 && b.type !== "normal" && b.type !== "double" && b.type !== "triple") {
+            triggerPowerUp(b.type);
+          }
+
+          setActionLog((prev) => [...prev, `hit_${idx}_${scoreRef.current}_${Date.now()}`]);
         }
       });
 
-      const sfx = createSfx(() => muted);
-      engineRef.current.sfx = sfx;
-    }
+      // Seviye Atlama / Zafer Kontrolü
+      if (allCleared) {
+        playAudio("victory");
+        const nextLvl = levelRef.current + 1;
+        if (nextLvl > 4) {
+          setGameState("victory");
+          saveTournamentScore(scoreRef.current + 500); // Zafer Bonusu
+        } else {
+          setLevel(nextLvl);
+          generateBricks(nextLvl);
+          resetBall();
+        }
+      }
 
-    engineRef.current.setSkin(skinVars);
-  }, [muted, skinVars, toastOnce, consumeAttemptOnce, practiceMode]);
-
-  /* resize */
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    const engine = engineRef.current;
-    if (!canvas || !engine) return;
-
-    const resize = () => {
-      const parent = canvas.parentElement;
-      const maxW = parent ? parent.clientWidth : 520;
-      const cssW = Math.max(320, Math.min(600, maxW));
-      const cssH = Math.round(cssW * (640 / 420));
-
-      const dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
-      canvas.style.width = `${cssW}px`;
-      canvas.style.height = `${cssH}px`;
-      canvas.width = Math.floor(cssW * dpr);
-      canvas.height = Math.floor(cssH * dpr);
-
-      engine.bindCanvas(canvas, dpr, cssW, cssH);
-      if (engine.state === "idle") engine.hardResetWorld(engine.level);
-      engine.draw();
+      // Parçacıkları Güncelle (Patlama Efekti)
+      particlesRef.current = particlesRef.current.filter((p) => {
+        p.x += p.vx;
+        p.y += p.vy;
+        p.alpha -= 0.02;
+        return p.alpha > 0;
+      });
     };
 
-    resize();
-    window.addEventListener("resize", resize);
-    return () => window.removeEventListener("resize", resize);
-  }, [gameState]);
-
-  /* loop */
-  useEffect(() => {
-    const engine = engineRef.current;
-    if (!engine) return;
-
-    const tick = (ts: number) => {
-      engine.step(ts);
-      engine.draw();
-      if (engine.state === "running") rafRef.current = requestAnimationFrame(tick);
+    const triggerPowerUp = (type: Brick["type"]) => {
+      playAudio("powerup");
+      activePowerUpRef.current = type;
+      if (type === "speed") {
+        ballVxFRef.current *= 1.4;
+        ballVyFRef.current *= 1.4;
+      } else if (type === "slow") {
+        ballVxFRef.current *= 0.7;
+        ballVyFRef.current *= 0.7;
+      } else if (type === "wide") {
+        paddleWidthRef.current = PADDLE_WIDTH * 1.5;
+        setTimeout(() => { paddleWidthRef.current = PADDLE_WIDTH; }, 8000);
+      } else if (type === "narrow") {
+        paddleWidthRef.current = PADDLE_WIDTH * 0.6;
+        setTimeout(() => { paddleWidthRef.current = PADDLE_WIDTH; }, 8000);
+      } else if (type === "laser") {
+        powerUpTimerRef.current = 6000; // 6 Saniye Lazer Süresi
+      } else if (type === "magnet") {
+        // Bir sonraki palette top yapışacak
+      }
     };
 
-    if (engine.state === "running") {
-      rafRef.current = requestAnimationFrame(tick);
-      return () => {
-        if (rafRef.current) cancelAnimationFrame(rafRef.current);
-        rafRef.current = null;
-      };
+    const render = () => {
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return;
+
+      ctx.clearRect(0, 0, FIXED_WIDTH, FIXED_HEIGHT);
+
+      // Tematik Arka Plan Çizimi (Neon Grid Tasarımı)
+      ctx.fillStyle = "#0f172a"; // Koyu Slate
+      ctx.fillRect(0, 0, FIXED_WIDTH, FIXED_HEIGHT);
+
+      ctx.strokeStyle = "rgba(51, 65, 85, 0.3)";
+      ctx.lineWidth = 1;
+      for (let i = 0; i < FIXED_WIDTH; i += 40) {
+        ctx.beginPath(); ctx.moveTo(i, 0); ctx.lineTo(i, FIXED_HEIGHT); ctx.stroke();
+      }
+      for (let j = 0; j < FIXED_HEIGHT; j += 40) {
+        ctx.beginPath(); ctx.moveTo(0, j); ctx.lineTo(FIXED_WIDTH, j); ctx.stroke();
+      }
+
+      // Tuğlaları Çiz
+      bricksRef.current.forEach((b) => {
+        if (b.status <= 0) return;
+        ctx.fillStyle = b.color;
+        ctx.beginPath();
+        ctx.roundRect ? ctx.roundRect(b.x, b.y, b.width, b.height, 4) : ctx.rect(b.x, b.y, b.width, b.height);
+        ctx.fill();
+
+        // Cam/Işıltı Efekti
+        ctx.fillStyle = "rgba(255,255,255,0.15)";
+        ctx.fillRect(b.x, b.y, b.width, b.height / 3);
+      });
+
+      // Paleti Çiz (Skin Seçimine Göre)
+      ctx.fillStyle = selectedSkin === "Gold" ? "#f59e0b" : selectedSkin === "Mint" ? "#10b981" : "#3b82f6";
+      ctx.beginPath();
+      ctx.roundRect 
+        ? ctx.roundRect(paddleXRef.current, FIXED_HEIGHT - PADDLE_HEIGHT - 4, paddleWidthRef.current, PADDLE_HEIGHT, 6)
+        : ctx.rect(paddleXRef.current, FIXED_HEIGHT - PADDLE_HEIGHT - 4, paddleWidthRef.current, PADDLE_HEIGHT);
+      ctx.fill();
+
+      // Topu Çiz (Neon Efektli)
+      ctx.shadowBlur = 10;
+      ctx.shadowColor = "#f43f5e";
+      ctx.fillStyle = "#ef4444";
+      ctx.beginPath();
+      ctx.arc(ballXRef.current, ballYRef.current, BALL_RADIUS, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.shadowBlur = 0; // Gölgeyi sıfırla
+
+      // Lazerleri Çiz
+      ctx.fillStyle = "#f43f5e";
+      lasersRef.current.forEach((l) => {
+        ctx.fillRect(l.x, l.y, 3, 10);
+      });
+
+      // Efekt Parçacıklarını Çiz
+      particlesRef.current.forEach((p) => {
+        ctx.save();
+        ctx.globalAlpha = p.alpha;
+        ctx.fillStyle = p.color;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      });
+    };
+
+    const loop = () => {
+      update();
+      render();
+      animId = requestAnimationFrame(loop);
+    };
+
+    if (gameState === "playing") {
+      animId = requestAnimationFrame(loop);
     } else {
-      engine.draw();
+      render();
     }
-  }, [gameState]);
 
-  /* keyboard */
-  useEffect(() => {
-    const engine = engineRef.current;
-    if (!engine) return;
+    return () => cancelAnimationFrame(animId);
+  }, [gameState, selectedSkin, playAudio]);
 
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "ArrowLeft" || e.key === "a" || e.key === "A") engine.input.left = true;
-      if (e.key === "ArrowRight" || e.key === "d" || e.key === "D") engine.input.right = true;
+  // --- DIGER ARAYÜZ FONKSİYONLARI ---
+  const switchMode = () => {
+    setGameMode((m) => (m === "tournament" ? "practice" : "tournament"));
+  };
 
-      if (e.key === " " || e.key === "Enter") {
-        if (engine.state === "running") togglePause();
-        else if (engine.state === "paused") togglePause();
-        else if ((engine.state === "idle" || engine.state === "gameover" || engine.state === "win") && canStart())
-          startGame();
-      }
+  const resetPractice = () => {
+    if (gameMode === "practice") startGame();
+  };
 
-      if ((e.key === "ArrowUp" || e.key === "w" || e.key === "W") && engine.stuckToPaddle) {
-        engine.releaseBallFromMagnet();
-      }
-    };
+  const shareScore = () => {
+    const text = `Base-Bingo Tuğla Kırma Oyununda ${score} skor ürettim! Gel ve rekorumu kır! 🚀`;
+    window.open(`https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}`, "_blank");
+  };
 
-    const onKeyUp = (e: KeyboardEvent) => {
-      if (e.key === "ArrowLeft" || e.key === "a" || e.key === "A") engine.input.left = false;
-      if (e.key === "ArrowRight" || e.key === "d" || e.key === "D") engine.input.right = false;
-    };
-
-    window.addEventListener("keydown", onKeyDown);
-    window.addEventListener("keyup", onKeyUp);
-    return () => {
-      window.removeEventListener("keydown", onKeyDown);
-      window.removeEventListener("keyup", onKeyUp);
-    };
-  }, [togglePause, canStart, startGame]);
-
-  /* pointer */
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    const engine = engineRef.current;
-    if (!canvas || !engine) return;
-
-    const getLocalX = (clientX: number) => {
-      const rect = canvas.getBoundingClientRect();
-      const x = (clientX - rect.left) / rect.width;
-      return x * engine.cw;
-    };
-
-    const onPointerDown = (e: PointerEvent) => {
-      engine.input.pointerActive = true;
-      try {
-        canvas.setPointerCapture(e.pointerId);
-      } catch {}
-      engine.movePaddleTo(getLocalX(e.clientX));
-
-      if (engine.state !== "running" && engine.state !== "paused" && canStart()) startGame();
-      if (engine.stuckToPaddle) engine.releaseBallFromMagnet();
-    };
-
-    const onPointerMove = (e: PointerEvent) => {
-      if (!engine.input.pointerActive) return;
-      engine.movePaddleTo(getLocalX(e.clientX));
-    };
-
-    const onPointerUp = () => {
-      engine.input.pointerActive = false;
-    };
-
-    canvas.addEventListener("pointerdown", onPointerDown);
-    canvas.addEventListener("pointermove", onPointerMove);
-    window.addEventListener("pointerup", onPointerUp);
-
-    return () => {
-      canvas.removeEventListener("pointerdown", onPointerDown);
-      canvas.removeEventListener("pointermove", onPointerMove);
-      window.removeEventListener("pointerup", onPointerUp);
-    };
-  }, [canStart, startGame]);
-
-  const weekKey = weekly?.weekKey ?? (mounted ? getIstanbulWeekKey() : "");
-  const weeklyTop = weekly?.top ?? [];
-
-  const hearts = useMemo(() => {
-    if (practiceMode) return "∞";
-    const max = DAILY_ATTEMPTS + 1;
-    const full = clamp(attemptsLeft, 0, max);
-    const empty = max - full;
-    return `${"❤️".repeat(full)}${"🤍".repeat(empty)}`;
-  }, [practiceMode, attemptsLeft]);
-
-  const overlayTitle = useMemo(() => {
-    if (lockedOut) return "Come back tomorrow";
-    if (gameState === "paused") return "Paused";
-    if (gameState === "gameover") return "Game Over";
-    if (gameState === "win") return isBossLevel(level) ? "Boss defeated 🏆" : "Level cleared 🎉";
-    return "Ready?";
-  }, [lockedOut, gameState, level]);
-
-  const overlaySubtitle = useMemo(() => {
-    if (lockedOut) return `Daily attempts bitti. Yenilenmeye: ${mounted ? formatHMS(countdownSec) : "--:--:--"} (TR)`;
-    if (gameState === "paused") return "Resume (Space/Enter) • Drag or ← →";
-    if (gameState === "gameover") return practiceMode ? "Practice mode açık, hak düşmez." : "1 hak kullanıldı.";
-    if (gameState === "win") return practiceMode ? "Practice mode açık, hak düşmez." : "1 hak kullanıldı.";
-    return practiceMode ? "∞ Practice mode: sınırsız deneme." : `Günlük ${DAILY_ATTEMPTS} hakkın var.`;
-  }, [lockedOut, mounted, countdownSec, gameState, practiceMode]);
-
-  const primaryCTA =
-    lockedOut ? "Practice" : gameState === "paused" ? "Resume" : gameState === "running" ? "Pause" : "Start";
-
-  const onPrimaryCTA = useCallback(() => {
-    if (lockedOut) {
-      setPracticeMode(true);
-      return;
-    }
-    if (gameState === "running") togglePause();
-    else if (gameState === "paused") togglePause();
-    else startGame();
-  }, [lockedOut, gameState, togglePause, startGame]);
-
-  const unlockedSkins = profile?.unlockedSkins ?? ["neon"];
-  const beatChallenge = useMemo(() => {
-    if (!challenge.active) return false;
-    return score >= challenge.targetScore;
-  }, [challenge.active, challenge.targetScore, score]);
+  const renderHeartLives = () => {
+    return "💜".repeat(Math.max(0, lives));
+  };
 
   return (
-    <div
-      className="w-full max-w-[980px] mx-auto p-4 sm:p-6"
-      style={
-        {
-          ["--a" as unknown as string]: skinVars.a,
-          ["--b" as unknown as string]: skinVars.b,
-          ["--c" as unknown as string]: skinVars.c,
-          ["--glow" as unknown as string]: skinVars.glow,
-        } as React.CSSProperties
-      }
-    >
-      <div className="relative">
-        <div className="absolute inset-0 -z-10 overflow-hidden rounded-[30px]">
-          <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top,rgba(139,92,246,0.26),transparent_55%),radial-gradient(ellipse_at_bottom,rgba(34,211,238,0.18),transparent_60%)]" />
-          <div className="absolute inset-0 opacity-25 bg-[linear-gradient(to_right,rgba(255,255,255,0.06)_1px,transparent_1px),linear-gradient(to_bottom,rgba(255,255,255,0.06)_1px,transparent_1px)] bg-[size:42px_42px]" />
-          <div className="absolute -inset-[35%] opacity-25 blur-3xl animate-[spin_18s_linear_infinite] bg-[conic-gradient(from_180deg,rgba(34,211,238,0.55),rgba(139,92,246,0.55),rgba(59,130,246,0.5),rgba(34,211,238,0.55))]" />
-          <div className="absolute inset-0 bg-gradient-to-b from-black/0 via-black/35 to-black/70" />
-          <div className="absolute inset-0 particles-layer opacity-35" />
+    <div className="w-full max-w-md mx-auto p-4 bg-slate-950 border border-slate-800 rounded-3xl text-white text-sm space-y-4 shadow-2xl">
+      
+      {/* 1. BAŞLIK VE SKOR ALANI */}
+      <div className="flex justify-between items-center border-b border-slate-800/80 pb-3">
+        <div>
+          <h1 className="text-xl font-black tracking-wider text-transparent bg-clip-text bg-gradient-to-r from-blue-400 via-indigo-400 to-purple-400">
+            BRICK BREAKER
+          </h1>
+          <p className="text-[11px] text-slate-500 font-medium">Phase-2 (No mint)</p>
         </div>
-
-        <div className="rounded-[30px] border border-white/10 bg-white/5 backdrop-blur-xl shadow-[0_0_0_1px_rgba(255,255,255,0.04),0_30px_90px_rgba(0,0,0,0.6)] p-4 sm:p-6">
-          <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-            <div>
-              <div className="flex items-center gap-3">
-                <div className="text-2xl sm:text-3xl font-extrabold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-[var(--a)] via-[var(--b)] to-[var(--c)] drop-shadow">
-                  BRICK BREAKER
-                </div>
-                <span className="text-xs px-2 py-1 rounded-full border border-white/10 bg-black/40 text-white/80">
-                  Phase-2 (No mint)
-                </span>
-              </div>
-
-              <div className="mt-1 text-sm text-white/70">
-                Break. Power-up. Level-up. <span className="text-white/85">Beat weekly rank.</span>
-              </div>
-
-              <div className="mt-3 flex flex-wrap items-center gap-2">
-                <div className="px-3 py-2 rounded-2xl border border-white/10 bg-black/30">
-                  <div className="text-[11px] text-white/60">Lives</div>
-                  <div className="text-sm">{hearts}</div>
-                </div>
-
-                <div className="px-3 py-2 rounded-2xl border border-white/10 bg-black/30">
-                  <div className="text-[11px] text-white/60">Level</div>
-                  <div className="text-sm font-semibold">
-                    LV {level} {isBossLevel(level) ? "· BOSS" : ""}
-                  </div>
-                </div>
-
-                <div className="px-3 py-2 rounded-2xl border border-white/10 bg-black/30">
-                  <div className="text-[11px] text-white/60">Player</div>
-                  <div className="text-sm font-semibold">
-                    LV {profile?.playerLevel ?? 1} · {profile?.xp ?? 0} XP
-                  </div>
-                </div>
-
-                <div className="px-3 py-2 rounded-2xl border border-white/10 bg-black/30">
-                  <div className="text-[11px] text-white/60">Streak</div>
-                  <div className="text-sm font-semibold">🔥 {profile?.streakDays ?? 0}</div>
-                </div>
-
-                {challenge.active && (
-                  <div className="px-3 py-2 rounded-2xl border border-white/10 bg-black/30">
-                    <div className="text-[11px] text-white/60">Challenge</div>
-                    <div className="text-sm font-semibold">
-                      Beat {challenge.targetScore} {beatChallenge ? "✅" : ""}
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
-
-            <div className="flex flex-wrap gap-2 items-center justify-start sm:justify-end">
-              <button
-                className={`group flex items-center gap-2 px-3 py-2 rounded-2xl border transition ${
-                  practiceMode ? "border-[var(--b)]/30 bg-[var(--b)]/10" : "border-white/10 bg-black/20 hover:border-white/20"
-                }`}
-                onClick={() => setPracticeMode((v) => !v)}
-                aria-label="Toggle practice mode"
-              >
-                <span className="text-sm text-white/80">Practice</span>
-                <span className={`relative w-10 h-6 rounded-full transition ${practiceMode ? "bg-[var(--b)]/60" : "bg-white/10"}`}>
-                  <span className={`absolute top-1 left-1 w-4 h-4 rounded-full bg-white/90 transition ${practiceMode ? "translate-x-4" : ""}`} />
-                </span>
-                <span className={`text-xs ${practiceMode ? "text-[var(--b)]" : "text-white/55"}`}>{practiceMode ? "∞" : ""}</span>
-              </button>
-
-              <button
-                className={`px-3 py-2 rounded-2xl border transition ${
-                  muted ? "border-white/10 bg-black/20 text-white/50" : "border-white/10 bg-black/20 hover:border-white/20"
-                }`}
-                onClick={() => setMuted((m) => !m)}
-                aria-label="Toggle sound"
-              >
-                <span className="text-sm">{muted ? "🔇" : "🔊"}</span>
-              </button>
-
-              <button
-                className="px-3 py-2 rounded-2xl border border-white/10 bg-black/20 hover:border-white/20 transition text-sm text-white/80"
-                onClick={() => resetToIdle(false)}
-              >
-                Reset
-              </button>
-
-              <button
-                className={`px-4 py-2 rounded-2xl border text-sm font-semibold transition active:scale-[0.98] ${
-                  lockedOut
-                    ? "border-[var(--a)]/30 bg-[var(--a)]/10 text-white/90 hover:bg-[var(--a)]/15"
-                    : "border-white/10 bg-white/10 text-white/90 hover:bg-white/15 hover:border-white/20"
-                }`}
-                onClick={onPrimaryCTA}
-              >
-                {primaryCTA}
-              </button>
-            </div>
+        <div className="text-right">
+          <div className="text-xs text-purple-400 font-bold mb-0.5 tracking-tight">
+            {renderHeartLives() || <span className="text-red-500 font-bold">ELENDİ</span>}
           </div>
-
-          {toast && (
-            <div className="mt-3">
-              <div className="inline-flex items-center gap-2 px-3 py-2 rounded-2xl border border-white/10 bg-black/35 text-sm text-white/85">
-                <span>✨</span>
-                <span>{toast}</span>
-              </div>
-            </div>
-          )}
-
-          <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
-            <div className="flex items-center gap-3">
-              <div
-                className={`text-base sm:text-lg font-extrabold tracking-tight ${
-                  gameState === "running" ? "animate-[pulse_1.8s_ease-in-out_infinite]" : ""
-                } bg-clip-text text-transparent bg-gradient-to-r from-white via-[var(--a)] to-[var(--b)]`}
-              >
-                {score}
-              </div>
-              <div className="text-xs text-white/60">SCORE</div>
-
-              {perfectRun && gameState === "win" && !practiceMode && (
-                <span className="text-xs px-2 py-1 rounded-full border border-emerald-300/20 bg-emerald-500/10 text-emerald-200">
-                  Perfect Run ⭐
-                </span>
-              )}
-
-              {weekly && profile && (
-                <span className="text-xs px-2 py-1 rounded-full border border-white/10 bg-white/5 text-white/75">
-                  Weekly rank: #{weekly.top.findIndex((e) => e.playerId === profile.playerId) + 1 || "—"}
-                </span>
-              )}
-            </div>
-
-            <div className="text-xs text-white/60">
-              {practiceMode ? "Attempts: ∞" : `Attempts left: ${attemptsLeft}/${DAILY_ATTEMPTS}+`} • Drag/←→ • Space: Pause • Tap: magnet release
-            </div>
-          </div>
-
-          <div className="mt-4 relative">
-            <div className="rounded-[26px] overflow-hidden border border-white/10 bg-black/30 shadow-[0_0_0_1px_rgba(255,255,255,0.03),0_20px_60px_rgba(0,0,0,0.55)]">
-              <canvas ref={canvasRef} className="block w-full h-auto touch-none select-none" />
-            </div>
-
-            {(gameState !== "running" || lockedOut) && (
-              <div className="absolute inset-0 flex items-center justify-center p-4">
-                <div className="w-full max-w-[760px] rounded-[26px] border border-white/10 bg-black/65 backdrop-blur-xl shadow-[0_0_0_1px_rgba(255,255,255,0.04),0_30px_90px_rgba(0,0,0,0.7)] p-5 sm:p-6 text-center">
-                  <div className="text-xl sm:text-2xl font-extrabold text-white/95">{overlayTitle}</div>
-                  <div className="mt-2 text-sm text-white/70">{overlaySubtitle}</div>
-
-                  <div className="mt-4">
-                    <div className="text-[11px] text-white/55 mb-2">Skins (unlock by Player LV)</div>
-                    <div className="flex flex-wrap gap-2 justify-center">
-                      {(Object.keys(SKINS) as SkinId[]).map((sid) => {
-                        const unlocked = unlockedSkins.includes(sid);
-                        const selected = profile?.selectedSkin === sid;
-                        return (
-                          <button
-                            key={sid}
-                            onClick={() => unlocked && setSkin(sid)}
-                            className={`px-3 py-2 rounded-2xl border text-sm transition ${
-                              selected
-                                ? "border-white/20 bg-white/15 text-white"
-                                : unlocked
-                                  ? "border-white/10 bg-white/5 text-white/80 hover:bg-white/10"
-                                  : "border-white/5 bg-black/20 text-white/35 cursor-not-allowed"
-                            }`}
-                            title={unlocked ? `Use ${SKINS[sid].name}` : `Unlock at Player LV ${SKINS[sid].unlockLevel}`}
-                          >
-                            {SKINS[sid].name} {!unlocked ? <span className="text-xs opacity-70">· LV {SKINS[sid].unlockLevel}</span> : null}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-
-                  <div className="mt-5 grid grid-cols-1 sm:grid-cols-2 gap-3 text-left">
-                    <div className="rounded-2xl border border-white/10 bg-white/5 p-3">
-                      <div className="text-[11px] text-white/55">Weekly tournament</div>
-                      <div className="text-sm text-white/85 mt-1">
-                        Week: <span className="text-white/90 font-semibold">{weekly?.weekKey ?? (mounted ? getIstanbulWeekKey() : "—")}</span>
-                      </div>
-                      <div className="text-xs text-white/55 mt-2">Share your score to challenge friends.</div>
-
-                      <div className="mt-3 flex flex-wrap gap-2">
-                        <button
-                          className="px-4 py-2 rounded-2xl border border-white/10 bg-black/20 text-white/85 hover:bg-white/10 transition text-sm"
-                          onClick={shareScore}
-                        >
-                          Share challenge
-                        </button>
-                        {shareCopied && <div className="text-xs text-white/70 self-center">Link copied ✅</div>}
-                      </div>
-                    </div>
-
-                    <div className="rounded-2xl border border-white/10 bg-white/5 p-3">
-                      <div className="text-[11px] text-white/55">Top 10</div>
-                      <div className="mt-2 space-y-1">
-                        {weeklyTop.length === 0 ? (
-                          <div className="text-sm text-white/70">No scores yet. Be the first.</div>
-                        ) : (
-                          weeklyTop.map((e, idx) => (
-                            <div key={e.playerId} className="flex items-center justify-between text-sm text-white/80">
-                              <span className="opacity-80">#{idx + 1} {e.name}</span>
-                              <span className="font-semibold text-white/90">{e.score}</span>
-                            </div>
-                          ))
-                        )}
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="mt-5 flex flex-wrap gap-2 justify-center">
-                    {lockedOut ? (
-                      <>
-                        <button
-                          className="px-5 py-2.5 rounded-2xl border border-[var(--a)]/30 bg-[var(--a)]/10 text-white/90 hover:bg-[var(--a)]/15 transition font-semibold"
-                          onClick={() => setPracticeMode(true)}
-                        >
-                          Switch to Practice (∞)
-                        </button>
-                        <button
-                          className="px-5 py-2.5 rounded-2xl border border-white/10 bg-white/10 text-white/85 hover:bg-white/15 transition"
-                          onClick={() => resetToIdle(true)}
-                        >
-                          Reset Level
-                        </button>
-                      </>
-                    ) : gameState === "win" ? (
-                      <>
-                        <button
-                          className="px-5 py-2.5 rounded-2xl border border-white/10 bg-white/10 text-white/90 hover:bg-white/15 transition font-semibold"
-                          onClick={nextLevel}
-                        >
-                          Next level →
-                        </button>
-                        <button
-                          className="px-5 py-2.5 rounded-2xl border border-white/10 bg-black/20 text-white/85 hover:bg-white/10 transition"
-                          onClick={startGame}
-                        >
-                          Replay level
-                        </button>
-                      </>
-                    ) : gameState === "gameover" ? (
-                      <>
-                        <button
-                          className={`px-5 py-2.5 rounded-2xl border transition font-semibold ${
-                            canStart()
-                              ? "border-white/10 bg-white/10 text-white/90 hover:bg-white/15"
-                              : "border-white/10 bg-black/20 text-white/40 cursor-not-allowed"
-                          }`}
-                          onClick={startGame}
-                          disabled={!canStart()}
-                        >
-                          Try again
-                        </button>
-                        <button
-                          className="px-5 py-2.5 rounded-2xl border border-white/10 bg-black/20 text-white/85 hover:bg-white/10 transition"
-                          onClick={() => resetToIdle(false)}
-                        >
-                          Back
-                        </button>
-                      </>
-                    ) : gameState === "paused" ? (
-                      <button
-                        className="px-5 py-2.5 rounded-2xl border border-white/10 bg-white/10 text-white/90 hover:bg-white/15 transition font-semibold"
-                        onClick={togglePause}
-                      >
-                        Resume
-                      </button>
-                    ) : (
-                      <button
-                        className={`px-5 py-2.5 rounded-2xl border transition font-semibold ${
-                          canStart()
-                            ? "border-white/10 bg-white/10 text-white/90 hover:bg-white/15"
-                            : "border-white/10 bg-black/20 text-white/40 cursor-not-allowed"
-                        }`}
-                        onClick={startGame}
-                        disabled={!canStart()}
-                      >
-                        Press Start
-                      </button>
-                    )}
-                  </div>
-
-                  <div className="mt-4 text-xs text-white/45">
-                    {practiceMode ? "Practice mode is on." : "Daily attempts reset at 00:00 (Europe/Istanbul)."} •{" "}
-                    <span className="text-white/55">Countdown:</span>{" "}
-                    <span suppressHydrationWarning>{mounted ? formatHMS(countdownSec) : "--:--:--"}</span>
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-
-          <div className="mt-4 flex flex-wrap items-center justify-between gap-2 text-xs text-white/45">
-            <div>
-              <span className="text-white/55">Week:</span> {weekKey || "—"} •{" "}
-              <span className="text-white/55">TR date:</span>{" "}
-              <span suppressHydrationWarning>{mounted ? dateKey : "---- -- --"}</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <button
-                className="px-3 py-2 rounded-2xl border border-white/10 bg-black/20 hover:border-white/20 transition text-xs text-white/80"
-                onClick={shareScore}
-              >
-                Share
-              </button>
-            </div>
+          <div className="text-xs font-semibold text-slate-400">
+            SCORE: <span className="text-white text-base font-black text-emerald-400">{score}</span>
           </div>
         </div>
       </div>
 
-      <style jsx>{`
-        @keyframes spin {
-          to {
-            transform: rotate(360deg);
-          }
-        }
-        @keyframes floatDots {
-          0% {
-            transform: translateY(0px);
-            opacity: 0.28;
-          }
-          50% {
-            transform: translateY(-16px);
-            opacity: 0.48;
-          }
-          100% {
-            transform: translateY(0px);
-            opacity: 0.28;
-          }
-        }
-        .particles-layer {
-          background-image: radial-gradient(circle at 15% 30%, rgba(255, 255, 255, 0.22) 0 1px, transparent 2px),
-            radial-gradient(circle at 60% 20%, rgba(255, 255, 255, 0.18) 0 1px, transparent 2px),
-            radial-gradient(circle at 80% 65%, rgba(255, 255, 255, 0.16) 0 1px, transparent 2px),
-            radial-gradient(circle at 25% 75%, rgba(255, 255, 255, 0.16) 0 1px, transparent 2px),
-            radial-gradient(circle at 40% 50%, rgba(255, 255, 255, 0.14) 0 1px, transparent 2px);
-          background-size: 520px 520px;
-          animation: floatDots 4.8s ease-in-out infinite;
-        }
-      `}</style>
+      {/* 2. OYUN ALANI (CANVAS) */}
+      <div className="relative flex justify-center bg-slate-900 rounded-2xl overflow-hidden border border-slate-800 shadow-inner">
+        <canvas
+          ref={canvasRef}
+          width={FIXED_WIDTH}
+          height={FIXED_HEIGHT}
+          onPointerMove={handlePointerMove}
+          onPointerDown={handlePointerDown}
+          className="w-full h-auto max-w-full block touch-none cursor-crosshair"
+        />
+
+        {/* Oyun Durum Katmanları (Overlay) */}
+        {gameState !== "playing" && (
+          <div className="absolute inset-0 bg-slate-950/85 backdrop-blur-sm flex flex-col items-center justify-center p-6 text-center space-y-4">
+            {gameState === "menu" && (
+              <>
+                <div className="space-y-1">
+                  <h3 className="text-lg font-bold text-blue-400">Oyuna Başla</h3>
+                  <p className="text-xs text-slate-400 max-w-xs">
+                    Mevcut Mod: <strong className="text-white uppercase text-amber-400">{gameMode}</strong>
+                  </p>
+                </div>
+                <button
+                  onClick={startGame}
+                  className="px-6 py-3 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 font-bold rounded-xl shadow-lg transition-transform active:scale-95 text-sm w-48"
+                >
+                  OYUNU BAŞLAT
+                </button>
+              </>
+            )}
+
+            {gameState === "gameover" && (
+              <>
+                <div className="space-y-1">
+                  <h3 className="text-xl font-black text-red-500 tracking-wide">GAME OVER</h3>
+                  <p className="text-xs text-slate-400">Tüm canlarınız tükendi.</p>
+                  <p className="text-sm font-bold text-slate-200">Toplam Skor: <span className="text-emerald-400 text-lg font-black">{score}</span></p>
+                </div>
+                <button
+                  onClick={startGame}
+                  className="px-6 py-2.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 font-semibold rounded-xl text-xs w-40"
+                >
+                  Tekrar Dene
+                </button>
+              </>
+            )}
+
+            {gameState === "victory" && (
+              <>
+                <div className="space-y-1">
+                  <h3 className="text-xl font-black text-emerald-400 tracking-wide">TEBRİKLER! 🎉</h3>
+                  <p className="text-xs text-slate-400">Tüm seviyeleri başarıyla temizlediniz.</p>
+                  <p className="text-sm font-bold text-slate-200">Final Skoru: <span className="text-amber-400 text-lg font-black">{score}</span></p>
+                </div>
+                <button
+                  onClick={startGame}
+                  className="px-6 py-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 font-bold rounded-xl text-xs w-40"
+                >
+                  Yeni Başarıya Koş
+                </button>
+              </>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* 3. OYUNCU BİLGİ KARTLARI (Kompakt Grid Yapı) */}
+      <div className="grid grid-cols-2 gap-2 text-xs">
+        <div className="bg-slate-900/60 p-2 rounded-xl border border-slate-800/80">
+          <span className="text-slate-500 block text-[10px] mb-0.5 font-bold uppercase">Player Stats</span>
+          <span className="font-extrabold text-blue-400">LV {playerLv}</span>
+          <span className="text-slate-400 mx-1.5">•</span>
+          <span className="text-slate-300 font-mono">{playerXp} XP</span>
+        </div>
+        <div className="bg-slate-900/60 p-2 rounded-xl border border-slate-800/80 flex justify-between items-center">
+          <div>
+            <span className="text-slate-500 block text-[10px] mb-0.5 font-bold uppercase">Level</span>
+            <span className="font-extrabold text-purple-400">LV {level}</span>
+          </div>
+          <div className="text-right">
+            <span className="text-slate-500 block text-[10px] mb-0.5 font-bold uppercase">Streak</span>
+            <span className="font-extrabold text-amber-500">🔥 {streak}</span>
+          </div>
+        </div>
+      </div>
+
+      {/* 4. DENEME VE KONTROL PANELİ (Tek Satır) */}
+      <div className="bg-slate-900/40 p-2.5 rounded-xl border border-slate-800/60 text-xs text-slate-400 space-y-1.5">
+        <div className="flex justify-between items-center">
+          <span className="font-medium">Attempts Left: <strong className="text-white font-mono bg-slate-800 px-1.5 py-0.5 rounded text-xs">{attemptsLeft}/3</strong></span>
+          {attemptsLeft <= 0 ? (
+            <span className="text-red-400 font-bold bg-red-500/10 px-2 py-0.5 rounded border border-red-500/20 text-[11px]">Daily attempts bitti.</span>
+          ) : (
+            <span className="text-emerald-400 font-semibold text-[11px]">Turnuvaya Hazır</span>
+          )}
+        </div>
+        <div className="flex justify-between text-[10px] text-slate-500 border-t border-slate-800/50 pt-1.5 font-medium">
+          <span>Drag / ←→ • Space: Magnet Release</span>
+          <span>Tap: Launch Ball</span>
+        </div>
+      </div>
+
+      {/* 5. TURNUVA DURUMU VE REFRESH SÜRESİ */}
+      <div className="flex justify-between items-center text-xs bg-indigo-500/5 border border-indigo-500/10 p-2.5 rounded-xl text-slate-400">
+        <div>
+          <span className="block text-[10px] text-slate-500 font-bold uppercase">Weekly Tournament</span>
+          <span className="text-slate-200 font-bold font-mono text-[11px]">{currentWeekStr || "2026-W26"}</span>
+          <span className="text-slate-600 mx-1">•</span>
+          <span className="text-slate-400 font-medium">Rank: <strong className="text-white font-mono">#{weeklyRank}</strong></span>
+        </div>
+        <div className="text-right">
+          <span className="block text-[10px] text-slate-500 font-bold uppercase">Next Reset (TR)</span>
+          <span className="text-amber-400 font-mono font-bold tracking-wider">{countdownStr || "00:00:00"}</span>
+        </div>
+      </div>
+
+      {/* 6. AKSİYON BUTONLARI */}
+      <div className="flex gap-2 text-xs">
+        <button
+          onClick={switchMode}
+          className="flex-1 py-2.5 bg-slate-900 hover:bg-slate-800 border border-slate-800 hover:border-slate-700 font-semibold rounded-xl transition-all active:scale-95 text-center text-slate-300"
+        >
+          {gameMode === "tournament" ? "🔄 Switch to Practice" : "🏆 Switch to Tournament"}
+        </button>
+        
+        {gameMode === "practice" ? (
+          <button
+            onClick={resetPractice}
+            className="flex-1 py-2.5 bg-slate-800 hover:bg-slate-700 font-semibold rounded-xl transition-all border border-slate-700 text-center text-white"
+          >
+            Reset Level 🔊
+          </button>
+        ) : (
+          <button
+            onClick={shareScore}
+            className="flex-1 py-2.5 bg-blue-600 hover:bg-blue-700 font-bold rounded-xl transition-all active:scale-95 text-center shadow-lg shadow-blue-500/10 text-white"
+          >
+            Share Challenge 📤
+          </button>
+        )}
+      </div>
+
+      {/* 7. SKOR TABLOSU & SKIN SEÇENEKLERİ (Sekme Mantığı) */}
+      <div className="bg-slate-900/30 p-2.5 rounded-xl border border-slate-800 text-xs space-y-2">
+        <div className="flex justify-between items-center border-b border-slate-800/60 pb-1.5">
+          <span className="font-bold text-slate-400 tracking-wide">Top 10 Leaderboard</span>
+          {/* Görünüm Değiştirici */}
+          <div className="flex gap-1.5 text-[10px]">
+            <button 
+              onClick={() => setSelectedSkin("Default")} 
+              className={`px-1.5 py-0.5 rounded ${selectedSkin === "Default" ? "bg-blue-500 font-bold text-white" : "text-slate-500"}`}
+            >
+              Neon
+            </button>
+            <button 
+              onClick={() => playerLv >= 4 ? setSelectedSkin("Gold") : alert("LV 4 kilitli!")} 
+              className={`px-1.5 py-0.5 rounded ${selectedSkin === "Gold" ? "bg-amber-500 font-bold text-slate-950" : "text-slate-500"}`}
+            >
+              Gold (LV 4)
+            </button>
+            <button 
+              onClick={() => playerLv >= 8 ? setSelectedSkin("Mint") : alert("LV 8 kilitli!")} 
+              className={`px-1.5 py-0.5 rounded ${selectedSkin === "Mint" ? "bg-emerald-500 font-bold text-slate-950" : "text-slate-500"}`}
+            >
+              Mint (LV 8)
+            </button>
+          </div>
+        </div>
+
+        {leaderboard.length === 0 ? (
+          <p className="text-slate-600 text-center py-2 italic font-medium">No scores yet. Be the first!</p>
+        ) : (
+          <div className="max-h-24 overflow-y-auto space-y-1 font-mono text-[11px] pr-1">
+            {leaderboard.map((row, idx) => (
+              <div key={row.id || idx} className="flex justify-between py-0.5 border-b border-slate-900/50 last:border-0">
+                <span className="text-slate-400">
+                  <strong className="text-slate-500 mr-1">#{idx + 1}</strong>
+                  {row.wallet_address?.slice(0, 6)}...{row.wallet_address?.slice(-4)}
+                </span>
+                <span className="font-bold text-emerald-400">{row.score} pts</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
     </div>
   );
 }
