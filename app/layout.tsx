@@ -3,7 +3,7 @@ import { Inter, Source_Code_Pro } from "next/font/google";
 import { SafeArea } from "@coinbase/onchainkit/minikit";
 import { minikitConfig } from "@/minikit.config";
 import { RootProvider } from "./rootProvider";
-import "./globals.css";
+import "@/app/globals.css"; // TypeScript uyarılarını engelleyen kesin çözüm yolu
 
 export async function generateMetadata(): Promise<Metadata> {
   return {
