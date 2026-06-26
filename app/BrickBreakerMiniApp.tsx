@@ -6,7 +6,12 @@ import { useAccount } from "wagmi";
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
-const supabase = createClient(supabaseUrl, supabaseAnonKey);
+
+// Vercel build esnasında URL boşsa çökmemesi için sahte (dummy) bir url/key ile fallback sağlıyoruz
+const safeSupabaseUrl = supabaseUrl && supabaseUrl.startsWith("http") ? supabaseUrl : "https://dummy-project.supabase.co";
+const safeSupabaseAnonKey = supabaseAnonKey || "dummy-key";
+
+const supabase = createClient(safeSupabaseUrl, safeSupabaseAnonKey);
 
 const FIXED_WIDTH = 400;
 const FIXED_HEIGHT = 500;
