@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useAccount, useSignMessage } from "wagmi"; 
 // OnchainKit, arka planda wagmi kütüphanesini kullanır.
-// Eğer projenizde wagmi kurulu değilse, OnchainKit'in kendi hook'larını veya butonlarını çağırabiliriz.
+// Eğer projenizde wagmi kurulu değilse, OnchainKit'in kendi hook'larını veya butonlarını çağabiliriz.
 import BrickBreakerMiniApp from "../BrickBreakerMiniApp";
 
 export default function Page() {
@@ -44,7 +44,7 @@ export default function Page() {
         </p>
         <div className="p-4 bg-slate-800 rounded-xl border border-slate-700 text-sm text-center">
           Lütfen ekranın sağ üst köşesinde veya cüzdan sağlayıcınızda bulunan 
-          <span className="text-blue-400 font-bold"> "Connect Wallet" </span> 
+          <span className="text-blue-400 font-bold"> &quot;Connect Wallet&quot; </span> 
           butonunu kullanarak cüzdanınızı bağlayın.
         </div>
       </div>
