@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useAccount, useSignMessage } from "wagmi"; 
+import { Wallet, ConnectWallet } from "@coinbase/onchainkit/wallet";
 import BrickBreakerMiniApp from "./BrickBreakerMiniApp";
 
 export default function Page() {
@@ -13,12 +14,9 @@ export default function Page() {
   const handleSign = async () => {
     try {
       setLoading(true);
-      
-      // Kullanıcının cüzdanına imza isteği gönderir
       await signMessageAsync({
         message: "Base-Bingo oyununa giriş yapmak ve şartları kabul etmek için bu mesajı onaylayın.",
       });
-
       setIsSigned(true);
     } catch (error) {
       console.error("İmzalama hatası:", error);
@@ -28,7 +26,7 @@ export default function Page() {
     }
   };
 
-  // AŞAMA 1: Kullanıcı cüzdanını henüz bağlamamışsa
+  // AŞAMA 1: Kullanıcı cüzdanını henüz bağlamamışsa (Fiziksel Buton Gösterilir)
   if (!isConnected) {
     return (
       <div className="flex flex-col items-center justify-center min-h-screen p-4 bg-slate-900 text-white">
@@ -36,12 +34,14 @@ export default function Page() {
           Base-Bingo
         </h1>
         <p className="text-slate-400 mb-8 text-center max-w-sm">
-          Oyuna giriş yapabilmek için lütfen Base cüzdanınızı bağlayın.
+          Oyuna giriş yapabilmek için lütfen cüzdanınızı bağlayın.
         </p>
-        <div className="p-4 bg-slate-800 rounded-xl border border-slate-700 text-sm text-center">
-          Lütfen ekranın sağ üst köşesinde veya cüzdan sağlayıcınızda bulunan 
-          <span className="text-blue-400 font-bold"> "Connect Wallet" </span> 
-          butonunu kullanarak cüzdanınızı bağlayın.
+        
+        {/* OnchainKit Resmi Cüzdan Bağlama Butonu */}
+        <div className="bg-blue-600 hover:bg-blue-700 font-bold rounded-xl shadow-lg transition-all p-1">
+          <Wallet>
+            <ConnectWallet className="bg-transparent text-white hover:bg-transparent" />
+          </Wallet>
         </div>
       </div>
     );
