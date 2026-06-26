@@ -1,25 +1,24 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { useAccount, useSignMessage, useConnect, useDisconnect } from "wagmi"; 
+import { useAccount, useSignMessage } from "wagmi"; 
+// OnchainKit'in resmi cüzdan menüsü bileşenlerini dahil ediyoruz
+import { Wallet, ConnectWallet, WalletDropdown, WalletDropdownDisconnect } from "@coinbase/onchainkit/wallet";
+import { Address, Avatar, Name, Identity } from "@coinbase/onchainkit/identity";
 import BrickBreakerMiniApp from "./BrickBreakerMiniApp";
 
 export default function Page() {
   const { address, isConnected } = useAccount();
   const { signMessageAsync } = useSignMessage();
-  const { connect, connectors } = useConnect();
-  const { disconnect } = useDisconnect();
   
   const [isSigned, setIsSigned] = useState(false);
   const [loading, setLoading] = useState(false);
   const [mounted, setMounted] = useState(false);
 
-  // Sayfa tarayıcıda tamamen yüklenene kadar bekle (Hydration ve Eklenti Güvenliği)
   useEffect(() => {
     setMounted(true);
   }, []);
 
-  // Eğer sayfa tarayıcıda henüz tamamen yüklenmediyse bariyeri koru, boş dön
   if (!mounted) return null;
 
   const handleSign = async () => {
@@ -37,7 +36,7 @@ export default function Page() {
     }
   };
 
-  // AŞAMA 1: Cüzdan Bağlı Değilse (Giriş Butonları)
+  // AŞAMA 1: Cüzdan Bağlı Değilse (Tek ve Şık Bir Cüzdan Bağlama Menüsü)
   if (!isConnected) {
     return (
       <div className="flex flex-col items-center justify-center min-h-screen p-4 bg-slate-900 text-white">
@@ -45,19 +44,22 @@ export default function Page() {
           Base-Bingo
         </h1>
         <p className="text-slate-400 mb-8 text-center max-w-sm">
-          Oyuna giriş yapabilmek için lütfen bir cüzdan seçip bağlayın.
+          Oyuna giriş yapabilmek için lütfen cüzdanınızı bağlayın.
         </p>
         
-        <div className="flex flex-col gap-3 w-full max-w-xs">
-          {connectors.map((connector) => (
-            <button
-              key={connector.uid}
-              onClick={() => connect({ connector })}
-              className="w-full py-3 px-4 bg-blue-600 hover:bg-blue-700 font-bold rounded-xl transition-all active:scale-95 text-center text-sm"
-            >
-              {connector.name} ile Bağlan
-            </button>
-          ))}
+        {/* OnchainKit Hazır Menülü Cüzdan Butonu Yapısı */}
+        <div className="flex justify-center w-full max-w-xs">
+          <Wallet>
+            <ConnectWallet className="w-full py-4 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl transition-all shadow-lg shadow-blue-500/10 text-center" />
+            <WalletDropdown>
+              <Identity className="px-4 pt-3 pb-2" hasCopyAddressOnClick>
+                <Avatar />
+                <Name />
+                <Address />
+              </Identity>
+              <WalletDropdownDisconnect />
+            </WalletDropdown>
+          </Wallet>
         </div>
       </div>
     );
@@ -83,12 +85,15 @@ export default function Page() {
             {loading ? "Onay Bekleniyor..." : "Oyuna Girişi Onayla"}
           </button>
           
-          <button
-            onClick={() => disconnect()}
-            className="text-xs text-slate-500 hover:text-slate-400 underline decoration-dotted hover:cursor-pointer"
-          >
-            Başka Cüzdan Seç / Bağlantıyı Kes
-          </button>
+          {/* İmza aşamasında cüzdan değiştirmek isterse diye açılır menüyü burada da gösteriyoruz */}
+          <div className="mt-2 flex justify-center text-xs">
+            <Wallet>
+              <ConnectWallet className="bg-transparent text-slate-500 hover:text-slate-400 underline decoration-dotted text-xs p-0 border-none hover:bg-transparent" />
+              <WalletDropdown>
+                <WalletDropdownDisconnect />
+              </WalletDropdown>
+            </Wallet>
+          </div>
         </div>
       </div>
     );
