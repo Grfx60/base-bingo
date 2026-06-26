@@ -39,6 +39,14 @@ interface Laser {
   y: number;
 }
 
+interface LeaderboardRow {
+  id?: string;
+  wallet_address: string;
+  score: number;
+  level_reached?: number;
+  week_str?: string;
+}
+
 export default function BrickBreakerMiniApp() {
   const { address } = useAccount();
   const userWallet = address || "Guest";
@@ -65,7 +73,7 @@ export default function BrickBreakerMiniApp() {
   const [countdownStr, setCountdownStr] = useState("");
   const [currentWeekStr, setCurrentWeekStr] = useState("");
   const [weeklyRank, setWeeklyRank] = useState<number | string>("—");
-  const [leaderboard, setLeaderboard] = useState<any[]>([]);
+  const [leaderboard, setLeaderboard] = useState<LeaderboardRow[]>([]);
 
   // Güvenlik ve Hile Koruması
   const [clientSessionId, setClientSessionId] = useState("");
@@ -80,7 +88,6 @@ export default function BrickBreakerMiniApp() {
   const livesRef = useRef(4);
   const gameStateRef = useRef<"menu" | "playing" | "gameover" | "victory">("menu");
   const gameModeRef = useRef<"tournament" | "practice">("tournament");
-  const attemptsLeftRef = useRef(3);
 
   const paddleXRef = useRef((FIXED_WIDTH - PADDLE_WIDTH) / 2);
   const paddleWidthRef = useRef(PADDLE_WIDTH);
@@ -107,7 +114,11 @@ export default function BrickBreakerMiniApp() {
   const playAudio = useCallback((type: "hit" | "brick" | "powerup" | "lose" | "victory" | "laser") => {
     if (isMuted) return;
     try {
-      const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const windowObj = window as Window & { AudioContext?: typeof AudioContext; webkitAudioContext?: typeof AudioContext };
+      const AudioCtx = windowObj.AudioContext || windowObj.webkitAudioContext;
+      if (!AudioCtx) return;
+      
+      const ctx = new AudioCtx();
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
       osc.connect(gain);
@@ -166,38 +177,72 @@ export default function BrickBreakerMiniApp() {
   useEffect(() => { livesRef.current = lives; }, [lives]);
   useEffect(() => { gameStateRef.current = gameState; }, [gameState]);
   useEffect(() => { gameModeRef.current = gameMode; }, [gameMode]);
-  useEffect(() => { attemptsLeftRef.current = attemptsLeft; }, [attemptsLeft]);
 
   // --- ZAMAN VE HAFTA HESAPLAMA ---
   const getUTCWeekString = () => {
-    const d = new Date();
-    const utcTarget = new Date(d.valueOf() + d.getTimezoneOffset() * 60000);
-    utcTarget.setDate(utcTarget.getDate() + 4 - (utcTarget.getDay() || 7));
-    const yearStart = new Date(utcTarget.getFullYear(), 0, 1);
-    const weekNo = Math.ceil((((utcTarget.valueOf() - yearStart.valueOf()) / 86400000) + 1) / 7);
-    return `${utcTarget.getFullYear()}-W${weekNo < 10 ? "0" + weekNo : weekNo}`;
-  };
+  const d = new Date();
+  const utcTarget = new Date(d.valueOf() + d.getTimezoneOffset() * 60000);
+  // Doğru kullanım: setDate içine hesaplanan yeni gün değeri parametre olarak verilir
+  utcTarget.setDate(utcTarget.getDate() + 4 - (utcTarget.getDay() || 7));
+  const yearStart = new Date(utcTarget.getFullYear(), 0, 1);
+  const weekNo = Math.ceil((((utcTarget.valueOf() - yearStart.valueOf()) / 86400000) + 1) / 7);
+  return `${utcTarget.getFullYear()}-W${weekNo < 10 ? "0" + weekNo : weekNo}`;
+};
 
-  useEffect(() => {
-    setCurrentWeekStr(getUTCWeekString());
-    setClientSessionId(Math.random().toString(36).substring(2, 15));
+  // --- SKOR KAYDETME VE SEVİYE ATLAMA ---
+  const saveTournamentScore = useCallback(async (finalScore: number) => {
+    if (!userWallet || userWallet === "Guest" || gameModeRef.current !== "tournament") return;
+    const todayStr = new Date().toISOString().split("T")[0];
+    const currentWeek = getUTCWeekString();
 
-    const timer = setInterval(() => {
-      const now = new Date();
-      const tomorrow = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
-      const diff = tomorrow.getTime() - now.getTime();
+    try {
+      // Hak Düşürme İşlemi
+      const { data: att } = await supabase
+        .from("player_attempts")
+        .select("*")
+        .eq("wallet_address", userWallet)
+        .eq("date_str", todayStr)
+        .single();
 
-      const hours = Math.floor(diff / (1000 * 60 * 60));
-      const mins = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
-      const secs = Math.floor((diff % (1000 * 60)) / 1000);
+      if (att) {
+        await supabase.from("player_attempts").update({ count: att.count + 1 }).eq("id", att.id);
+      } else {
+        await supabase.from("player_attempts").insert([{ wallet_address: userWallet, date_str: todayStr, count: 1 }]);
+      }
 
-      setCountdownStr(
-        `${hours.toString().padStart(2, "0")}:${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`
-      );
-    }, 1000);
+      // Skoru Veritabanına Yazma
+      await supabase.from("brick_breaker_scores").insert([
+        {
+          wallet_address: userWallet,
+          score: finalScore,
+          level_reached: levelRef.current,
+          week_str: currentWeek,
+          session_id: clientSessionId,
+          verification_log: actionLog,
+        },
+      ]);
 
-    return () => clearInterval(timer);
-  }, []);
+      // XP ve Profil Güncelleme
+      const gainedXp = finalScore * 2;
+      let newXp = playerXp + gainedXp;
+      let newLv = playerLv;
+      const xpNeeded = playerLv * 500;
+
+      if (newXp >= xpNeeded) {
+        newXp -= xpNeeded;
+        newLv += 1;
+      }
+
+      await supabase
+        .from("player_profiles")
+        .update({ level: newLv, xp: newXp, streak: streak + 1 })
+        .eq("wallet_address", userWallet);
+
+      loadProfileAndLeaderboard();
+    } catch (err) {
+      console.error("Skor kaydedilirken hata oluştu:", err);
+    }
+  }, [userWallet, clientSessionId, actionLog, playerXp, playerLv, streak]);
 
   // --- VERİTABANI VE PROFIL YÜKLEME ---
   const loadProfileAndLeaderboard = useCallback(async () => {
@@ -250,6 +295,27 @@ export default function BrickBreakerMiniApp() {
   }, [userWallet]);
 
   useEffect(() => {
+    setCurrentWeekStr(getUTCWeekString());
+    setClientSessionId(Math.random().toString(36).substring(2, 15));
+
+    const timer = setInterval(() => {
+      const now = new Date();
+      const tomorrow = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+      const diff = tomorrow.getTime() - now.getTime();
+
+      const hours = Math.floor(diff / (1000 * 60 * 60));
+      const mins = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+      const secs = Math.floor((diff % (1000 * 60)) / 1000);
+
+      setCountdownStr(
+        `${hours.toString().padStart(2, "0")}:${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`
+      );
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
     loadProfileAndLeaderboard();
   }, [loadProfileAndLeaderboard]);
 
@@ -284,7 +350,7 @@ export default function BrickBreakerMiniApp() {
     for (let r = 0; r < rows; r++) {
       for (let c = 0; c < cols; c++) {
         let t: Brick["type"] = "normal";
-        let rand = Math.random();
+        const rand = Math.random();
 
         if (rand > 0.6) {
           t = types[Math.floor(Math.random() * types.length)];
@@ -314,61 +380,6 @@ export default function BrickBreakerMiniApp() {
       }
     }
     bricksRef.current = arr;
-  };
-
-  // --- SKOR KAYDETME VE SEVİYE ATLAMA ---
-  const saveTournamentScore = async (finalScore: number) => {
-    if (!userWallet || userWallet === "Guest" || gameModeRef.current !== "tournament") return;
-    const todayStr = new Date().toISOString().split("T")[0];
-    const currentWeek = getUTCWeekString();
-
-    try {
-      // Hak Düşürme İşlemi
-      const { data: att } = await supabase
-        .from("player_attempts")
-        .select("*")
-        .eq("wallet_address", userWallet)
-        .eq("date_str", todayStr)
-        .single();
-
-      if (att) {
-        await supabase.from("player_attempts").update({ count: att.count + 1 }).eq("id", att.id);
-      } else {
-        await supabase.from("player_attempts").insert([{ wallet_address: userWallet, date_str: todayStr, count: 1 }]);
-      }
-
-      // Skoru Veritabanına Yazma
-      await supabase.from("brick_breaker_scores").insert([
-        {
-          wallet_address: userWallet,
-          score: finalScore,
-          level_reached: levelRef.current,
-          week_str: currentWeek,
-          session_id: clientSessionId,
-          verification_log: actionLog,
-        },
-      ]);
-
-      // XP ve Profil Güncelleme
-      const gainedXp = finalScore * 2;
-      let newXp = playerXp + gainedXp;
-      let newLv = playerLv;
-      const xpNeeded = playerLv * 500;
-
-      if (newXp >= xpNeeded) {
-        newXp -= xpNeeded;
-        newLv += 1;
-      }
-
-      await supabase
-        .from("player_profiles")
-        .update({ level: newLv, xp: newXp, streak: streak + 1 })
-        .eq("wallet_address", userWallet);
-
-      loadProfileAndLeaderboard();
-    } catch (err) {
-      console.error("Skor kaydedilirken hata oluştu:", err);
-    }
   };
 
   // --- OYUNU BAŞLATMA ---
@@ -452,6 +463,28 @@ export default function BrickBreakerMiniApp() {
   useEffect(() => {
     let animId: number;
 
+    const triggerPowerUp = (type: Brick["type"]) => {
+      playAudio("powerup");
+      activePowerUpRef.current = type;
+      if (type === "speed") {
+        ballVxFRef.current *= 1.4;
+        ballVyFRef.current *= 1.4;
+      } else if (type === "slow") {
+        ballVxFRef.current *= 0.7;
+        ballVyFRef.current *= 0.7;
+      } else if (type === "wide") {
+        paddleWidthRef.current = PADDLE_WIDTH * 1.5;
+        setTimeout(() => { paddleWidthRef.current = PADDLE_WIDTH; }, 8000);
+      } else if (type === "narrow") {
+        paddleWidthRef.current = PADDLE_WIDTH * 0.6;
+        setTimeout(() => { paddleWidthRef.current = PADDLE_WIDTH; }, 8000);
+      } else if (type === "laser") {
+        powerUpTimerRef.current = 6000; // 6 Saniye Lazer Süresi
+      } else if (type === "magnet") {
+        // Bir sonraki palette top yapışacak
+      }
+    };
+
     const update = () => {
       if (gameStateRef.current !== "playing") return;
 
@@ -528,16 +561,16 @@ export default function BrickBreakerMiniApp() {
       // Lazerleri İlerlet ve Tuğla Çarpmalarını Hesapla
       lasersRef.current = lasersRef.current.filter((l) => {
         l.y -= 7;
-        let hit = false;
+        let lHit = false;
         bricksRef.current.forEach((b) => {
           if (b.status > 0 && l.x >= b.x && l.x <= b.x + b.width && l.y >= b.y && l.y <= b.y + b.height) {
-            hit = true;
+            lHit = true;
             b.status -= 1;
             setScore((s) => s + 15);
             createBrickExplosion(b.x, b.y, b.color);
           }
         });
-        return !hit && l.y > 0;
+        return !lHit && l.y > 0;
       });
 
       // 6. Tuğla Çarpmaları (Top İle)
@@ -599,28 +632,6 @@ export default function BrickBreakerMiniApp() {
       });
     };
 
-    const triggerPowerUp = (type: Brick["type"]) => {
-      playAudio("powerup");
-      activePowerUpRef.current = type;
-      if (type === "speed") {
-        ballVxFRef.current *= 1.4;
-        ballVyFRef.current *= 1.4;
-      } else if (type === "slow") {
-        ballVxFRef.current *= 0.7;
-        ballVyFRef.current *= 0.7;
-      } else if (type === "wide") {
-        paddleWidthRef.current = PADDLE_WIDTH * 1.5;
-        setTimeout(() => { paddleWidthRef.current = PADDLE_WIDTH; }, 8000);
-      } else if (type === "narrow") {
-        paddleWidthRef.current = PADDLE_WIDTH * 0.6;
-        setTimeout(() => { paddleWidthRef.current = PADDLE_WIDTH; }, 8000);
-      } else if (type === "laser") {
-        powerUpTimerRef.current = 6000; // 6 Saniye Lazer Süresi
-      } else if (type === "magnet") {
-        // Bir sonraki palette top yapışacak
-      }
-    };
-
     const render = () => {
       const canvas = canvasRef.current;
       if (!canvas) return;
@@ -647,7 +658,11 @@ export default function BrickBreakerMiniApp() {
         if (b.status <= 0) return;
         ctx.fillStyle = b.color;
         ctx.beginPath();
-        ctx.roundRect ? ctx.roundRect(b.x, b.y, b.width, b.height, 4) : ctx.rect(b.x, b.y, b.width, b.height);
+        if (ctx.roundRect) {
+          ctx.roundRect(b.x, b.y, b.width, b.height, 4);
+        } else {
+          ctx.rect(b.x, b.y, b.width, b.height);
+        }
         ctx.fill();
 
         // Cam/Işıltı Efekti
@@ -658,9 +673,11 @@ export default function BrickBreakerMiniApp() {
       // Paleti Çiz (Skin Seçimine Göre)
       ctx.fillStyle = selectedSkin === "Gold" ? "#f59e0b" : selectedSkin === "Mint" ? "#10b981" : "#3b82f6";
       ctx.beginPath();
-      ctx.roundRect 
-        ? ctx.roundRect(paddleXRef.current, FIXED_HEIGHT - PADDLE_HEIGHT - 4, paddleWidthRef.current, PADDLE_HEIGHT, 6)
-        : ctx.rect(paddleXRef.current, FIXED_HEIGHT - PADDLE_HEIGHT - 4, paddleWidthRef.current, PADDLE_HEIGHT);
+      if (ctx.roundRect) {
+        ctx.roundRect(paddleXRef.current, FIXED_HEIGHT - PADDLE_HEIGHT - 4, paddleWidthRef.current, PADDLE_HEIGHT, 6);
+      } else {
+        ctx.rect(paddleXRef.current, FIXED_HEIGHT - PADDLE_HEIGHT - 4, paddleWidthRef.current, PADDLE_HEIGHT);
+      }
       ctx.fill();
 
       // Topu Çiz (Neon Efektli)
@@ -703,7 +720,7 @@ export default function BrickBreakerMiniApp() {
     }
 
     return () => cancelAnimationFrame(animId);
-  }, [gameState, selectedSkin, playAudio]);
+  }, [gameState, selectedSkin, playAudio, saveTournamentScore]);
 
   // --- DIGER ARAYÜZ FONKSİYONLARI ---
   const switchMode = () => {
@@ -732,7 +749,15 @@ export default function BrickBreakerMiniApp() {
           <h1 className="text-xl font-black tracking-wider text-transparent bg-clip-text bg-gradient-to-r from-blue-400 via-indigo-400 to-purple-400">
             BRICK BREAKER
           </h1>
-          <p className="text-[11px] text-slate-500 font-medium">Phase-2 (No mint)</p>
+          <div className="flex items-center gap-2 mt-0.5">
+            <span className="text-[11px] text-slate-500 font-medium">Phase-2 (No mint)</span>
+            <button 
+              onClick={() => setIsMuted(!isMuted)} 
+              className="text-xs text-slate-400 hover:text-white"
+            >
+              {isMuted ? "🔇" : "🔊"}
+            </button>
+          </div>
         </div>
         <div className="text-right">
           <div className="text-xs text-purple-400 font-bold mb-0.5 tracking-tight">
@@ -866,7 +891,7 @@ export default function BrickBreakerMiniApp() {
           onClick={switchMode}
           className="flex-1 py-2.5 bg-slate-900 hover:bg-slate-800 border border-slate-800 hover:border-slate-700 font-semibold rounded-xl transition-all active:scale-95 text-center text-slate-300"
         >
-          {gameMode === "tournament" ? "🔄 Switch to Practice" : "🏆 Switch to Tournament"}
+          {gameMode === "tournament" ? "🏆 Switch to Practice" : "🏆 Switch to Tournament"}
         </button>
         
         {gameMode === "practice" ? (
@@ -874,7 +899,7 @@ export default function BrickBreakerMiniApp() {
             onClick={resetPractice}
             className="flex-1 py-2.5 bg-slate-800 hover:bg-slate-700 font-semibold rounded-xl transition-all border border-slate-700 text-center text-white"
           >
-            Reset Level 🔊
+            Reset Level 🔄
           </button>
         ) : (
           <button
