@@ -110,6 +110,21 @@ export default function BrickBreakerMiniApp() {
   const rightPressedRef = useRef(false);
   const leftPressedRef = useRef(false);
 
+  // --- REFS FOR STATS (To prevent recreation of functions) ---
+  const playerLvRef = useRef(1);
+  const playerXpRef = useRef(0);
+  const streakRef = useRef(0);
+
+  // --- LOCAL REFS SENKRONİZASYONU ---
+  useEffect(() => { scoreRef.current = score; }, [score]);
+  useEffect(() => { levelRef.current = level; }, [level]);
+  useEffect(() => { livesRef.current = lives; }, [lives]);
+  useEffect(() => { gameStateRef.current = gameState; }, [gameState]);
+  useEffect(() => { gameModeRef.current = gameMode; }, [gameMode]);
+  useEffect(() => { playerLvRef.current = playerLv; }, [playerLv]);
+  useEffect(() => { playerXpRef.current = playerXp; }, [playerXp]);
+  useEffect(() => { streakRef.current = streak; }, [streak]);
+
   // --- AUDIO SİSTEMİ ---
   const playAudio = useCallback((type: "hit" | "brick" | "powerup" | "lose" | "victory" | "laser") => {
     if (isMuted) return;
@@ -171,78 +186,15 @@ export default function BrickBreakerMiniApp() {
     }
   }, [isMuted]);
 
-  // --- LOCAL REFS SENKRONİZASYONU ---
-  useEffect(() => { scoreRef.current = score; }, [score]);
-  useEffect(() => { levelRef.current = level; }, [level]);
-  useEffect(() => { livesRef.current = lives; }, [lives]);
-  useEffect(() => { gameStateRef.current = gameState; }, [gameState]);
-  useEffect(() => { gameModeRef.current = gameMode; }, [gameMode]);
-
   // --- ZAMAN VE HAFTA HESAPLAMA ---
-  const getUTCWeekString = () => {
-  const d = new Date();
-  const utcTarget = new Date(d.valueOf() + d.getTimezoneOffset() * 60000);
-  // Doğru kullanım: setDate içine hesaplanan yeni gün değeri parametre olarak verilir
-  utcTarget.setDate(utcTarget.getDate() + 4 - (utcTarget.getDay() || 7));
-  const yearStart = new Date(utcTarget.getFullYear(), 0, 1);
-  const weekNo = Math.ceil((((utcTarget.valueOf() - yearStart.valueOf()) / 86400000) + 1) / 7);
-  return `${utcTarget.getFullYear()}-W${weekNo < 10 ? "0" + weekNo : weekNo}`;
-};
-
-  // --- SKOR KAYDETME VE SEVİYE ATLAMA ---
-  const saveTournamentScore = useCallback(async (finalScore: number) => {
-    if (!userWallet || userWallet === "Guest" || gameModeRef.current !== "tournament") return;
-    const todayStr = new Date().toISOString().split("T")[0];
-    const currentWeek = getUTCWeekString();
-
-    try {
-      // Hak Düşürme İşlemi
-      const { data: att } = await supabase
-        .from("player_attempts")
-        .select("*")
-        .eq("wallet_address", userWallet)
-        .eq("date_str", todayStr)
-        .single();
-
-      if (att) {
-        await supabase.from("player_attempts").update({ count: att.count + 1 }).eq("id", att.id);
-      } else {
-        await supabase.from("player_attempts").insert([{ wallet_address: userWallet, date_str: todayStr, count: 1 }]);
-      }
-
-      // Skoru Veritabanına Yazma
-      await supabase.from("brick_breaker_scores").insert([
-        {
-          wallet_address: userWallet,
-          score: finalScore,
-          level_reached: levelRef.current,
-          week_str: currentWeek,
-          session_id: clientSessionId,
-          verification_log: actionLog,
-        },
-      ]);
-
-      // XP ve Profil Güncelleme
-      const gainedXp = finalScore * 2;
-      let newXp = playerXp + gainedXp;
-      let newLv = playerLv;
-      const xpNeeded = playerLv * 500;
-
-      if (newXp >= xpNeeded) {
-        newXp -= xpNeeded;
-        newLv += 1;
-      }
-
-      await supabase
-        .from("player_profiles")
-        .update({ level: newLv, xp: newXp, streak: streak + 1 })
-        .eq("wallet_address", userWallet);
-
-      loadProfileAndLeaderboard();
-    } catch (err) {
-      console.error("Skor kaydedilirken hata oluştu:", err);
-    }
-  }, [userWallet, clientSessionId, actionLog, playerXp, playerLv, streak]);
+  const getUTCWeekString = useCallback(() => {
+    const d = new Date();
+    const utcTarget = new Date(d.valueOf() + d.getTimezoneOffset() * 60000);
+    utcTarget.setDate(utcTarget.getDate() + 4 - (utcTarget.getDay() || 7));
+    const yearStart = new Date(utcTarget.getFullYear(), 0, 1);
+    const weekNo = Math.ceil((((utcTarget.valueOf() - yearStart.valueOf()) / 86400000) + 1) / 7);
+    return `${utcTarget.getFullYear()}-W${weekNo < 10 ? "0" + weekNo : weekNo}`;
+  }, []);
 
   // --- VERİTABANI VE PROFIL YÜKLEME ---
   const loadProfileAndLeaderboard = useCallback(async () => {
@@ -292,7 +244,62 @@ export default function BrickBreakerMiniApp() {
       const myIndex = lb.findIndex((r) => r.wallet_address === userWallet);
       setWeeklyRank(myIndex !== -1 ? myIndex + 1 : "10+");
     }
-  }, [userWallet]);
+  }, [userWallet, getUTCWeekString]);
+
+  // --- SKOR KAYDETME VE SEVİYE ATLAMA ---
+  const saveTournamentScore = useCallback(async (finalScore: number) => {
+    if (!userWallet || userWallet === "Guest" || gameModeRef.current !== "tournament") return;
+    const todayStr = new Date().toISOString().split("T")[0];
+    const currentWeek = getUTCWeekString();
+
+    try {
+      // Hak Düşürme İşlemi
+      const { data: att } = await supabase
+        .from("player_attempts")
+        .select("*")
+        .eq("wallet_address", userWallet)
+        .eq("date_str", todayStr)
+        .single();
+
+      if (att) {
+        await supabase.from("player_attempts").update({ count: att.count + 1 }).eq("id", att.id);
+      } else {
+        await supabase.from("player_attempts").insert([{ wallet_address: userWallet, date_str: todayStr, count: 1 }]);
+      }
+
+      // Skoru Veritabanına Yazma
+      await supabase.from("brick_breaker_scores").insert([
+        {
+          wallet_address: userWallet,
+          score: finalScore,
+          level_reached: levelRef.current,
+          week_str: currentWeek,
+          session_id: clientSessionId,
+          verification_log: actionLog,
+        },
+      ]);
+
+      // XP ve Profil Güncelleme
+      const gainedXp = finalScore * 2;
+      let newXp = playerXpRef.current + gainedXp;
+      let newLv = playerLvRef.current;
+      const xpNeeded = playerLvRef.current * 500;
+
+      if (newXp >= xpNeeded) {
+        newXp -= xpNeeded;
+        newLv += 1;
+      }
+
+      await supabase
+        .from("player_profiles")
+        .update({ level: newLv, xp: newXp, streak: streakRef.current + 1 })
+        .eq("wallet_address", userWallet);
+
+      loadProfileAndLeaderboard();
+    } catch (err) {
+      console.error("Skor kaydedilirken hata oluştu:", err);
+    }
+  }, [userWallet, clientSessionId, actionLog, getUTCWeekString, loadProfileAndLeaderboard]);
 
   useEffect(() => {
     setCurrentWeekStr(getUTCWeekString());
@@ -313,7 +320,7 @@ export default function BrickBreakerMiniApp() {
     }, 1000);
 
     return () => clearInterval(timer);
-  }, []);
+  }, [getUTCWeekString]);
 
   useEffect(() => {
     loadProfileAndLeaderboard();
