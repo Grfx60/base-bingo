@@ -26,7 +26,8 @@ interface Brick {
   height: number;
   status: number;
   type: "normal" | "double" | "triple" | "speed" | "slow" | "wide" | "narrow" | "laser" | "magnet";
-  color: string; // İlk koddaki gibi tekil renk yapısına geri dönüldü
+  color: string;      // Tuğlanın ana pastel rengi
+  shadowColor: string; // 3D alt derinlik için koyu tonu
 }
 
 interface Particle {
@@ -145,7 +146,7 @@ export default function BrickBreakerMiniApp() {
         osc.start(); osc.stop(ctx.currentTime + 0.1);
       } else if (type === "brick") {
         osc.type = "triangle";
-        osc.frequency.setValueAtTime(300, ctx.currentTime);
+        osc.frequency.setValueAtTime(320, ctx.currentTime);
         gain.gain.setValueAtTime(0.1, ctx.currentTime);
         gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.08);
         osc.start(); osc.stop(ctx.currentTime + 0.08);
@@ -332,15 +333,15 @@ export default function BrickBreakerMiniApp() {
     }
   };
 
-  // --- İLK ORİJİNAL TUĞLA RENK PALETİNE GERİ DÖNÜLDÜ ---
+  // --- GÖRSELDEKİ SOFT PASTEL VE MODERN 3D RENK YAPISI ---
   const generateBricks = (lvl: number) => {
     const rows = 4 + Math.min(lvl, 3);
     const cols = 6;
-    const padding = 6;
-    const offsetTop = 40;
+    const padding = 7;
+    const offsetTop = 45;
     const offsetLeft = 12;
     const bWidth = (FIXED_WIDTH - offsetLeft * 2 - padding * (cols - 1)) / cols;
-    const bHeight = 16;
+    const bHeight = 18;
 
     const types: Brick["type"][] = ["normal", "double", "triple", "speed", "slow", "wide", "narrow", "laser", "magnet"];
     const arr: Brick[] = [];
@@ -355,16 +356,18 @@ export default function BrickBreakerMiniApp() {
         }
 
         let hp = 1;
-        let color = "#3b82f6"; // İlk temiz orijinal renkler
+        // Görseldeki gibi pürüzsüz pastel ana renkler ve 3D alt gölgeleri (koyu tonları)
+        let color = "#4A90E2";       // Pastel Gök Mavisi (Normal)
+        let shadowColor = "#2C66A3"; 
 
-        if (t === "double") { hp = 2; color = "#a855f7"; }
-        if (t === "triple") { hp = 3; color = "#ef4444"; }
-        if (t === "speed") color = "#eab308";
-        if (t === "slow") color = "#06b6d4";
-        if (t === "wide") color = "#10b981";
-        if (t === "narrow") color = "#f97316";
-        if (t === "laser") color = "#ec4899";
-        if (t === "magnet") color = "#6366f1";
+        if (t === "double") { hp = 2; color = "#B37FEB"; shadowColor = "#722ED1"; } // Pastel Lila
+        if (t === "triple") { hp = 3; color = "#FF4D4F"; shadowColor = "#A61D24"; } // Pastel Kırmızı
+        if (t === "speed") { color = "#FF9C6E"; shadowColor = "#D4380D"; }         // Pastel Turuncu
+        if (t === "slow") { color = "#5CCBD3"; shadowColor = "#006D75"; }          // Pastel Turkuaz
+        if (t === "wide") { color = "#73D13D"; shadowColor = "#389E0D"; }          // Pastel Yeşil
+        if (t === "narrow") { color = "#FFEC3D"; shadowColor = "#D4B106"; }        // Pastel Sarı
+        if (t === "laser") { color = "#FF85C0"; shadowColor = "#C41D7F"; }         // Pastel Pembe
+        if (t === "magnet") { color = "#2F54EB"; shadowColor = "#1D39C4"; }        // Klasik İndigo Mavi
 
         arr.push({
           x: c * (bWidth + padding) + offsetLeft,
@@ -374,6 +377,7 @@ export default function BrickBreakerMiniApp() {
           status: hp,
           type: t,
           color: color,
+          shadowColor: shadowColor,
         });
       }
     }
@@ -620,7 +624,7 @@ export default function BrickBreakerMiniApp() {
       ctx.fillStyle = "#0f172a";
       ctx.fillRect(0, 0, FIXED_WIDTH, FIXED_HEIGHT);
 
-      ctx.strokeStyle = "rgba(51, 65, 85, 0.3)";
+      ctx.strokeStyle = "rgba(51, 65, 85, 0.25)";
       ctx.lineWidth = 1;
       for (let i = 0; i < FIXED_WIDTH; i += 40) {
         ctx.beginPath(); ctx.moveTo(i, 0); ctx.lineTo(i, FIXED_HEIGHT); ctx.stroke();
@@ -629,26 +633,43 @@ export default function BrickBreakerMiniApp() {
         ctx.beginPath(); ctx.moveTo(0, j); ctx.lineTo(FIXED_WIDTH, j); ctx.stroke();
       }
 
-      // --- İLK GÜZEL VE SADE TUĞLA ÇİZİM TARZINA GERİ DÖNÜLDÜ ---
+      // --- MODERN 3D VE YUMUŞAK PASTEL TUĞLA ÇİZİMİ (GÖRSELDEKİ STİL) ---
       bricksRef.current.forEach((b) => {
         if (b.status <= 0) return;
+
+        // 1. ADIM: 3D Derinlik için Alt Kalınlık/Gölge Katmanı
+        ctx.fillStyle = b.shadowColor;
+        ctx.beginPath();
+        if (ctx.roundRect) {
+          ctx.roundRect(b.x, b.y + 3, b.width, b.height, 5); // 3px aşağıda gölge katmanı
+        } else {
+          ctx.rect(b.x, b.y + 3, b.width, b.height);
+        }
+        ctx.fill();
+
+        // 2. ADIM: Ana Üst Pastel Gövde Çizimi
         ctx.fillStyle = b.color;
         ctx.beginPath();
-        if (ctx.roundRect) { ctx.roundRect(b.x, b.y, b.width, b.height, 4); } 
-        else { ctx.rect(b.x, b.y, b.width, b.height); }
+        if (ctx.roundRect) {
+          ctx.roundRect(b.x, b.y, b.width, b.height, 5); // Yumuşak yuvarlatılmış modern köşeler
+        } else {
+          ctx.rect(b.x, b.y, b.width, b.height);
+        }
         ctx.fill();
         
-        // Üst yatay parlama/cam efekti
-        ctx.fillStyle = "rgba(255,255,255,0.15)";
-        ctx.fillRect(b.x, b.y, b.width, b.height / 3);
+        // 3. ADIM: Yumuşak Plastik/Mat Doku ve Işık Yansıması
+        ctx.fillStyle = "rgba(255, 255, 255, 0.16)";
+        ctx.fillRect(b.x + 1, b.y + 1, b.width - 2, b.height / 3.5);
       });
 
+      // Modern Yumuşak Hatlara Sahip Palet Tasarımı
       ctx.fillStyle = selectedSkin === "Gold" ? "#f59e0b" : selectedSkin === "Mint" ? "#10b981" : "#3b82f6";
       ctx.beginPath();
       if (ctx.roundRect) { ctx.roundRect(paddleXRef.current, FIXED_HEIGHT - PADDLE_HEIGHT - 4, paddleWidthRef.current, PADDLE_HEIGHT, 6); } 
       else { ctx.rect(paddleXRef.current, FIXED_HEIGHT - PADDLE_HEIGHT - 4, paddleWidthRef.current, PADDLE_HEIGHT); }
       ctx.fill();
 
+      // Soft Top Parlaması
       ctx.shadowBlur = 10;
       ctx.shadowColor = "#f43f5e";
       ctx.fillStyle = "#ef4444";
