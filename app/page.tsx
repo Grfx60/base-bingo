@@ -1,7 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useAccount, useSignMessage, useConnect, useDisconnect } from "wagmi"; 
+import BrickBreakerMiniApp from "./BrickBreakerMiniApp";
 
 export default function Page() {
   const { address, isConnected } = useAccount();
@@ -11,16 +12,15 @@ export default function Page() {
   
   const [isSigned, setIsSigned] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [mounted, setMounted] = useState(false);
 
-  // Dinamik yükleme ile ana oyunu dahil ediyoruz (Build hatalarını önler)
-  const [BrickBreakerMiniApp, setBrickBreakerMiniApp] = useState<any>(null);
+  // Sayfa tarayıcıda tamamen yüklenene kadar bekle (Hydration ve Eklenti Güvenliği)
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
-  // Oyun bileşenini sadece imza tamamlandığında hafızaya yükle
-  useState(() => {
-    import("./BrickBreakerMiniApp").then((mod) => {
-      setBrickBreakerMiniApp(() => mod.default);
-    });
-  });
+  // Eğer sayfa tarayıcıda henüz tamamen yüklenmediyse bariyeri koru, boş dön
+  if (!mounted) return null;
 
   const handleSign = async () => {
     try {
@@ -37,7 +37,7 @@ export default function Page() {
     }
   };
 
-  // AŞAMA 1: Cüzdan Bağlı Değilse
+  // AŞAMA 1: Cüzdan Bağlı Değilse (Giriş Butonları)
   if (!isConnected) {
     return (
       <div className="flex flex-col items-center justify-center min-h-screen p-4 bg-slate-900 text-white">
@@ -85,7 +85,7 @@ export default function Page() {
           
           <button
             onClick={() => disconnect()}
-            className="text-xs text-slate-500 hover:text-slate-400 underline decoration-dotted"
+            className="text-xs text-slate-500 hover:text-slate-400 underline decoration-dotted hover:cursor-pointer"
           >
             Başka Cüzdan Seç / Bağlantıyı Kes
           </button>
@@ -95,13 +95,5 @@ export default function Page() {
   }
 
   // AŞAMA 3: Her şey hazırsa oyunu başlat
-  if (!BrickBreakerMiniApp) {
-    return (
-      <div className="flex items-center justify-center min-h-screen bg-slate-900 text-white">
-        <p className="text-sm text-slate-400 animate-pulse">Oyun yükleniyor...</p>
-      </div>
-    );
-  }
-
   return <BrickBreakerMiniApp />;
 }
