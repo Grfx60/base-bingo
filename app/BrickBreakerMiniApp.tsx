@@ -25,8 +25,10 @@ interface Brick {
   width: number;
   height: number;
   status: number;
+  maxStatus: number; // Can takibi ve dinamik kararma için eklendi
   type: "normal" | "double" | "triple" | "speed" | "slow" | "wide" | "narrow" | "laser" | "magnet";
-  color: string;
+  color1: string;    // Gradyan başlangıç rengi
+  color2: string;    // Gradyan bitiş rengi
 }
 
 interface Particle {
@@ -145,7 +147,7 @@ export default function BrickBreakerMiniApp() {
         osc.start(); osc.stop(ctx.currentTime + 0.1);
       } else if (type === "brick") {
         osc.type = "triangle";
-        osc.frequency.setValueAtTime(300, ctx.currentTime);
+        osc.frequency.setValueAtTime(340, ctx.currentTime);
         gain.gain.setValueAtTime(0.1, ctx.currentTime);
         gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.08);
         osc.start(); osc.stop(ctx.currentTime + 0.08);
@@ -319,27 +321,28 @@ export default function BrickBreakerMiniApp() {
   }, [loadProfileAndLeaderboard]);
 
   const createBrickExplosion = (bx: number, by: number, color: string) => {
-    for (let i = 0; i < 8; i++) {
+    for (let i = 0; i < 12; i++) {
       particlesRef.current.push({
         x: bx + 20,
         y: by + 10,
-        vx: (Math.random() - 0.5) * 4,
-        vy: (Math.random() - 0.5) * 4,
+        vx: (Math.random() - 0.5) * 5,
+        vy: (Math.random() - 0.5) * 5,
         alpha: 1,
         color: color,
-        size: Math.random() * 3 + 2,
+        size: Math.random() * 2.5 + 1.5,
       });
     }
   };
 
+  // --- MODERN TUĞLA ALGORİTMASI (NEON GEÇİŞLİ ÇİFT RENKLER) ---
   const generateBricks = (lvl: number) => {
     const rows = 4 + Math.min(lvl, 3);
     const cols = 6;
-    const padding = 6;
-    const offsetTop = 40;
+    const padding = 7;
+    const offsetTop = 45;
     const offsetLeft = 12;
     const bWidth = (FIXED_WIDTH - offsetLeft * 2 - padding * (cols - 1)) / cols;
-    const bHeight = 16;
+    const bHeight = 18;
 
     const types: Brick["type"][] = ["normal", "double", "triple", "speed", "slow", "wide", "narrow", "laser", "magnet"];
     const arr: Brick[] = [];
@@ -354,16 +357,17 @@ export default function BrickBreakerMiniApp() {
         }
 
         let hp = 1;
-        let color = "#3b82f6";
+        // Modern ikili siber renk paletleri (Giriş ve Çıkış Renkleri)
+        let c1 = "#00f2fe"; let c2 = "#4facfe"; // Turkuaz - Mavi (Normal)
 
-        if (t === "double") { hp = 2; color = "#a855f7"; }
-        if (t === "triple") { hp = 3; color = "#ef4444"; }
-        if (t === "speed") color = "#eab308";
-        if (t === "slow") color = "#06b6d4";
-        if (t === "wide") color = "#10b981";
-        if (t === "narrow") color = "#f97316";
-        if (t === "laser") color = "#ec4899";
-        if (t === "magnet") color = "#6366f1";
+        if (t === "double") { hp = 2; c1 = "#b92b27"; c2 = "#1565c0"; } // Cyber Kırmızı/Mavi
+        if (t === "triple") { hp = 3; c1 = "#f12711"; c2 = "#f5af19"; } // Güneş Ateşi (Sarı/Kırmızı)
+        if (t === "speed") { c1 = "#ff007f"; c2 = "#ff007f"; } // Hot Pink
+        if (t === "slow") { c1 = "#11998e"; c2 = "#38ef7d"; }  // Neon Yeşil
+        if (t === "wide") { c1 = "#8e2de2"; c2 = "#4a00e0"; }  // Cyber Mor
+        if (t === "narrow") { c1 = "#f857a6"; c2 = "#ff5858"; } // Mercan Pembe
+        if (t === "laser") { c1 = "#f7797d"; c2 = "#fbd38d"; }  // Soft Neon Rose
+        if (t === "magnet") { c1 = "#00c6ff"; c2 = "#0072ff"; } // Elektrik Mavisi
 
         arr.push({
           x: c * (bWidth + padding) + offsetLeft,
@@ -371,8 +375,10 @@ export default function BrickBreakerMiniApp() {
           width: bWidth,
           height: bHeight,
           status: hp,
+          maxStatus: hp,
           type: t,
-          color: color,
+          color1: c1,
+          color2: c2,
         });
       }
     }
@@ -550,7 +556,7 @@ export default function BrickBreakerMiniApp() {
             lHit = true;
             b.status -= 1;
             setScore((s) => s + 15);
-            createBrickExplosion(b.x, b.y, b.color);
+            createBrickExplosion(b.x, b.y, b.color1);
           }
         });
         return !lHit && l.y > 0;
@@ -570,7 +576,7 @@ export default function BrickBreakerMiniApp() {
           b.status -= 1;
           setScore((s) => s + 10);
           playAudio("brick");
-          createBrickExplosion(b.x, b.y, b.color);
+          createBrickExplosion(b.x, b.y, b.color1);
 
           const overlapX = Math.min(ballXRef.current + BALL_RADIUS - b.x, b.x + b.width - (ballXRef.current - BALL_RADIUS));
           const overlapY = Math.min(ballYRef.current + BALL_RADIUS - b.y, b.y + b.height - (ballYRef.current - BALL_RADIUS));
@@ -616,10 +622,11 @@ export default function BrickBreakerMiniApp() {
       if (!ctx) return;
 
       ctx.clearRect(0, 0, FIXED_WIDTH, FIXED_HEIGHT);
-      ctx.fillStyle = "#0f172a";
+      ctx.fillStyle = "#0a0f1d"; // Daha derin bir uzay siyahı
       ctx.fillRect(0, 0, FIXED_WIDTH, FIXED_HEIGHT);
 
-      ctx.strokeStyle = "rgba(51, 65, 85, 0.3)";
+      // Siber Izgara (Cyber Grid Background)
+      ctx.strokeStyle = "rgba(30, 41, 59, 0.4)";
       ctx.lineWidth = 1;
       for (let i = 0; i < FIXED_WIDTH; i += 40) {
         ctx.beginPath(); ctx.moveTo(i, 0); ctx.lineTo(i, FIXED_HEIGHT); ctx.stroke();
@@ -628,24 +635,56 @@ export default function BrickBreakerMiniApp() {
         ctx.beginPath(); ctx.moveTo(0, j); ctx.lineTo(FIXED_WIDTH, j); ctx.stroke();
       }
 
+      // --- MODERN NEON GEÇİŞLİ TUĞLA ÇİZİMİ ---
       bricksRef.current.forEach((b) => {
         if (b.status <= 0) return;
-        ctx.fillStyle = b.color;
+
+        ctx.save();
+        
+        // Can azalınca siber kararma/şeffaflık etkisi (Dinamik Can Görseli)
+        const hpRatio = b.status / b.maxStatus;
+        ctx.globalAlpha = 0.4 + hpRatio * 0.6;
+
+        // Modern Gradyan (Renk Geçişi) Oluşturma
+        const gradient = ctx.createLinearGradient(b.x, b.y, b.x + b.width, b.y + b.height);
+        gradient.addColorStop(0, b.color1);
+        gradient.addColorStop(1, b.color2);
+
+        // Siber Neon Parlama Efekti
+        ctx.shadowBlur = 6;
+        ctx.shadowColor = b.color1;
+
+        ctx.fillStyle = gradient;
         ctx.beginPath();
-        if (ctx.roundRect) { ctx.roundRect(b.x, b.y, b.width, b.height, 4); } 
-        else { ctx.rect(b.x, b.y, b.width, b.height); }
+        if (ctx.roundRect) {
+          ctx.roundRect(b.x, b.y, b.width, b.height, 5); // Yuvarlatılmış modern siber kartlar
+        } else {
+          ctx.rect(b.x, b.y, b.width, b.height);
+        }
         ctx.fill();
-        ctx.fillStyle = "rgba(255,255,255,0.15)";
-        ctx.fillRect(b.x, b.y, b.width, b.height / 3);
+
+        // Neon Çevre Çizgisi (Modern Pahlı Kenar)
+        ctx.shadowBlur = 0; 
+        ctx.strokeStyle = "rgba(255, 255, 255, 0.25)";
+        ctx.lineWidth = 1;
+        ctx.stroke();
+
+        // Fütüristik Işık Yansıması (Cam Efekti)
+        ctx.fillStyle = "rgba(255, 255, 255, 0.12)";
+        ctx.fillRect(b.x + 2, b.y + 2, b.width - 4, b.height / 3.5);
+
+        ctx.restore();
       });
 
+      // Palet Çizimi
       ctx.fillStyle = selectedSkin === "Gold" ? "#f59e0b" : selectedSkin === "Mint" ? "#10b981" : "#3b82f6";
       ctx.beginPath();
       if (ctx.roundRect) { ctx.roundRect(paddleXRef.current, FIXED_HEIGHT - PADDLE_HEIGHT - 4, paddleWidthRef.current, PADDLE_HEIGHT, 6); } 
       else { ctx.rect(paddleXRef.current, FIXED_HEIGHT - PADDLE_HEIGHT - 4, paddleWidthRef.current, PADDLE_HEIGHT); }
       ctx.fill();
 
-      ctx.shadowBlur = 10;
+      // Top Çizimi (Neon Efektli)
+      ctx.shadowBlur = 12;
       ctx.shadowColor = "#f43f5e";
       ctx.fillStyle = "#ef4444";
       ctx.beginPath();
@@ -716,7 +755,7 @@ export default function BrickBreakerMiniApp() {
         </div>
       </div>
 
-      {/* 2. OYUN ALANI (CANVAS + İÇİNDEKİ YAZILAR/BUTONLAR) */}
+      {/* 2. OYUN ALANI (CANVAS + START OVERLAY) */}
       <div className="relative flex justify-center bg-slate-900 rounded-2xl overflow-hidden border border-slate-800 shadow-inner">
         <canvas
           ref={canvasRef}
@@ -727,7 +766,6 @@ export default function BrickBreakerMiniApp() {
           className="w-full h-auto max-w-full block touch-none cursor-crosshair"
         />
 
-        {/* Oyun Durum Katmanları (Overlay) */}
         {gameState !== "playing" && (
           <div className="absolute inset-0 bg-slate-950/85 backdrop-blur-sm flex flex-col items-center justify-center p-6 text-center">
             {gameState === "menu" && (
@@ -736,7 +774,6 @@ export default function BrickBreakerMiniApp() {
                   <h3 className="text-lg font-bold text-blue-400">Ready to Strike?</h3>
                   <p className="text-xs text-slate-400">Mode: <span className="text-amber-400 uppercase font-bold">{gameMode}</span></p>
                 </div>
-                {/* İSTEDİĞİNİZ DEĞİŞİKLİK: Sadece ekran ortasında parlayan modern START butonu */}
                 <button
                   onClick={startGame}
                   className="px-8 py-3.5 bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-600 hover:from-blue-500 hover:to-purple-500 font-black text-white rounded-xl shadow-xl transition-all active:scale-95 tracking-widest text-sm border border-indigo-400/20 animate-pulse"
@@ -781,7 +818,7 @@ export default function BrickBreakerMiniApp() {
         )}
       </div>
 
-      {/* 3. OYUNCU İSTATİSTİKLERİ (İÇ İÇE GEÇMEYEN TEMİZ GRID) */}
+      {/* 3. OYUNCU İSTATİSTİKLERİ */}
       <div className="grid grid-cols-2 gap-2 text-xs">
         <div className="bg-slate-900/80 p-3 rounded-xl border border-slate-800 flex flex-col gap-0.5 shadow-sm">
           <span className="text-slate-500 text-[10px] font-bold uppercase tracking-wider">Player Stats</span>
@@ -853,7 +890,6 @@ export default function BrickBreakerMiniApp() {
         <div className="flex justify-between items-center border-b border-slate-800/60 pb-2">
           <span className="font-bold text-slate-400 tracking-wide">Top 10 Leaderboard</span>
           
-          {/* Görünüm Değiştirici Sekmeler */}
           <div className="flex gap-1 text-[10px] bg-slate-950 p-0.5 rounded border border-slate-800">
             <button 
               onClick={() => setSelectedSkin("Default")} 
