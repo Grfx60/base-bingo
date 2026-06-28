@@ -44,7 +44,6 @@ export default function BrickBreakerMiniApp() {
   const paddleXRef = useRef((FIXED_WIDTH - PADDLE_WIDTH) / 2);
   const paddleWidthRef = useRef(PADDLE_WIDTH);
   
-  // Top mekanikleri ve hızları
   const ballXRef = useRef(FIXED_WIDTH / 2);
   const ballYRef = useRef(FIXED_HEIGHT - 30);
   const ballVxFRef = useRef(1.8);
@@ -55,7 +54,6 @@ export default function BrickBreakerMiniApp() {
   const [activePowerUp, setActivePowerUp] = useState<string | null>(null);
   const powerUpsRef = useRef([]); 
   
-  // Efektlerin sürelerini arkada takip etmek için referanslar (5 saniye = 5000ms)
   const isFrozenRef = useRef(false);
   const isFireRef = useRef(false);
 
@@ -85,7 +83,7 @@ export default function BrickBreakerMiniApp() {
   const playAudio = useCallback((type) => {
     if (isMuted) return;
     try {
-      const AudioCtx = window.AudioContext || window.webkitAutoContext;
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
       if (!AudioCtx) return;
       const ctx = new AudioCtx();
       const osc = ctx.createOscillator();
@@ -98,24 +96,21 @@ export default function BrickBreakerMiniApp() {
     } catch(e){}
   }, [isMuted]);
 
-  // Tuğla Oluşturucu ve Rastgele Yeni Kapsüller (FREEZE ve FIRE eklendi)
   const generateBricks = () => {
     const rows = 4; const cols = 6; const padding = 8; const offsetTop = 35; const offsetLeft = 14;
     const bWidth = (FIXED_WIDTH - offsetLeft * 2 - padding * (cols - 1)) / cols; const bHeight = 18;
     const arr = [];
     const colors = ["#A0C4FF", "#BDB2FF", "#FFADAD", "#FFD6A5"]; 
     const shadows = ["#7EA5E0", "#9B8FE0", "#E08E8E", "#E0B788"]; 
-
     const types = ["WIDE", "LIFE", "FREEZE", "FIRE"];
 
     for (let r = 0; r < rows; r++) {
       for (let c = 0; c < cols; c++) {
         const rand = Math.random();
         let chosenPowerUp = null;
-        if (rand < 0.28) { // %28 ihtimalle herhangi bir bonus gizle
+        if (rand < 0.28) {
           chosenPowerUp = types[Math.floor(Math.random() * types.length)];
         }
-
         arr.push({
           x: c * (bWidth + padding) + offsetLeft,
           y: r * (bHeight + padding) + offsetTop,
@@ -145,18 +140,13 @@ export default function BrickBreakerMiniApp() {
     setGameState("playing");
   };
 
-  // 1. DÜZELTME: Seviye atladıkça hız çarpanı artışını yavaşlattık (0.4 yerine 0.15 artıyor)
   const resetBall = (currentLevel = levelRef.current) => {
     ballXRef.current = FIXED_WIDTH / 2; 
     ballYRef.current = FIXED_HEIGHT - 35;
-    
     let speedMultiplier = 1.8 + (currentLevel - 1) * 0.15; 
-    
-    // Eğer dondurucu aktifken top resetlenirse yavaş hızda başlasın
     if (isFrozenRef.current) {
       speedMultiplier = speedMultiplier * 0.5;
     }
-
     ballVxFRef.current = Math.random() > 0.5 ? speedMultiplier : -speedMultiplier;
     ballVyFRef.current = -speedMultiplier;
   };
@@ -171,33 +161,27 @@ export default function BrickBreakerMiniApp() {
     }
   };
 
-  // Oyun Döngüsü Motoru
   useEffect(() => {
     let animId;
     const update = () => {
       if (gameStateRef.current !== "playing") return;
       
-      // Topun Hareketi
       ballXRef.current += ballVxFRef.current; 
       ballYRef.current += ballVyFRef.current;
 
-      // Duvar Çarpmaları
       if (ballXRef.current + BALL_RADIUS > FIXED_WIDTH || ballXRef.current - BALL_RADIUS < 0) { ballVxFRef.current = -ballVxFRef.current; playAudio("hit"); }
       if (ballYRef.current - BALL_RADIUS < 0) { ballVyFRef.current = -ballVyFRef.current; playAudio("hit"); }
 
-      // Pedala Çarpma
       if (ballVyFRef.current > 0 && ballYRef.current + BALL_RADIUS >= FIXED_HEIGHT - PADDLE_HEIGHT - 4 && ballXRef.current >= paddleXRef.current && ballXRef.current <= paddleXRef.current + paddleWidthRef.current) {
         ballVyFRef.current = -ballVyFRef.current; 
         playAudio("hit");
       }
 
-      // Topun Aşağı Düşmesi
       if (ballYRef.current > FIXED_HEIGHT) {
         playAudio("lose"); const nextLives = livesRef.current - 1; setLives(nextLives);
         if (nextLives <= 0) setGameState("gameover"); else resetBall();
       }
 
-      // Tuğla Çarpmaları
       bricksRef.current.forEach((b) => {
         if (b.status <= 0) return;
         if (ballXRef.current >= b.x && ballXRef.current <= b.x + b.width && ballYRef.current >= b.y && ballYRef.current <= b.y + b.height) {
@@ -205,7 +189,6 @@ export default function BrickBreakerMiniApp() {
           setScore((s) => s + 10); 
           playAudio("brick");
 
-          // 3. DÜZELTME: Eğer ATEŞ TOPU aktif DEĞİLSE top normal seker. Aktifse delip geçer (yönü değişmez).
           if (!isFireRef.current) {
             ballVyFRef.current = -ballVyFRef.current; 
           }
@@ -221,7 +204,6 @@ export default function BrickBreakerMiniApp() {
         }
       });
 
-      // Bonus kapsüllerinin hareketi ve yakalanma kontrolleri
       powerUpsRef.current.forEach((p, idx) => {
         p.y += 1.2; 
 
@@ -236,7 +218,6 @@ export default function BrickBreakerMiniApp() {
           else if (p.type === "LIFE") {
             setLives(l => l + 1);
           } 
-          // 2. DÜZELTME: Dondurucu Yakalandığında (5 Saniye Sürer)
           else if (p.type === "FREEZE") {
             if (!isFrozenRef.current) {
               isFrozenRef.current = true;
@@ -251,7 +232,6 @@ export default function BrickBreakerMiniApp() {
               }, 5000);
             }
           } 
-          // 3. DÜZELTME: Ateş Topu Yakalandığında (5 Saniye Sürer)
           else if (p.type === "FIRE") {
             isFireRef.current = true;
             setActivePowerUp("🔥 Ateş Topu");
@@ -275,7 +255,6 @@ export default function BrickBreakerMiniApp() {
       ctx.clearRect(0, 0, FIXED_WIDTH, FIXED_HEIGHT);
       ctx.fillStyle = "#0f172a"; ctx.fillRect(0, 0, FIXED_WIDTH, FIXED_HEIGHT);
 
-      // Yuvarlak Köşeli ve 3D Parlamalı Tuğla Çizimi
       bricksRef.current.forEach((b) => {
         if (b.status <= 0) return;
         ctx.save();
@@ -289,7 +268,6 @@ export default function BrickBreakerMiniApp() {
         ctx.restore();
       });
 
-      // Bonus Kapsüllerini Çizme
       powerUpsRef.current.forEach((p) => {
         let pColor = "#38bdf8";
         let pIcon = "↔️";
@@ -304,21 +282,18 @@ export default function BrickBreakerMiniApp() {
         ctx.fillText(pIcon, p.x - 5, p.y + 3);
       });
 
-      // Pedalı Çizme
       ctx.fillStyle = "#3b82f6";
       ctx.beginPath(); ctx.roundRect(paddleXRef.current, FIXED_HEIGHT - PADDLE_HEIGHT - 4, paddleWidthRef.current, PADDLE_HEIGHT, 4); ctx.fill();
 
-      // Topu Çizme (Ateş ve Buz durumlarına göre renk değiştiriyor)
       if (isFireRef.current) {
-        ctx.fillStyle = "#f97316"; // Ateş rengi turuncu
+        ctx.fillStyle = "#f97316";
       } else if (isFrozenRef.current) {
-        ctx.fillStyle = "#60a5fa"; // Buz rengi açık mavi
+        ctx.fillStyle = "#60a5fa";
       } else {
-        ctx.fillStyle = "#f43f5e"; // Standart kırmızı
+        ctx.fillStyle = "#f43f5e";
       }
       ctx.beginPath(); ctx.arc(ballXRef.current, ballYRef.current, BALL_RADIUS, 0, Math.PI * 2); ctx.fill();
       
-      // Ateş veya buz durumunda topun etrafına küçük bir aura/parlama efekti verelim
       if (isFireRef.current || isFrozenRef.current) {
         ctx.strokeStyle = isFireRef.current ? "rgba(249, 115, 22, 0.4)" : "rgba(96, 165, 250, 0.4)";
         ctx.lineWidth = 4;
@@ -331,7 +306,6 @@ export default function BrickBreakerMiniApp() {
     return () => cancelAnimationFrame(animId);
   }, [gameState, playAudio, level]);
 
-  // Kontroller
   const handlePointerMove = (e) => {
     if (gameState !== "playing" || !canvasRef.current) return;
     const rect = canvasRef.current.getBoundingClientRect();
@@ -362,10 +336,11 @@ export default function BrickBreakerMiniApp() {
       {/* ÜST PANEL */}
       <div className="flex justify-between items-center border-b border-slate-800 pb-2">
         <div>
+          {/* Yeni Oyun İsmi: BASE BRICK BREAKER */}
           <h1 className="text-base font-black tracking-wider bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-purple-400">
-            BASE BINGO
+            BASE BRICK BREAKER
           </h1>
-          <p className="text-[10px] text-slate-500 font-bold">Brick Breaker Edition</p>
+          <p className="text-[10px] text-slate-500 font-bold">Classic Arcade Edition</p>
         </div>
         <button
           onClick={() => isConnected ? disconnect() : (connectors[0] && connect({ connector: connectors[0] }))}
@@ -396,7 +371,6 @@ export default function BrickBreakerMiniApp() {
           className="w-full h-full block touch-none cursor-crosshair"
         />
 
-        {/* Aktif Güç Göstergesi */}
         {activePowerUp && (
           <div className="absolute top-2 left-2 bg-blue-600/80 backdrop-blur-sm px-2 py-0.5 rounded text-[9px] font-bold tracking-wide animate-pulse">
             {activePowerUp} AKTİF!
@@ -443,7 +417,8 @@ export default function BrickBreakerMiniApp() {
         <button onClick={() => setGameMode(m => m === "tournament" ? "practice" : "tournament")} className="py-2 bg-slate-800 border border-slate-700 font-bold rounded-lg text-slate-300 text-center">
           {gameMode === "tournament" ? "🏆 Tournament" : "🕹️ Practice"}
         </button>
-        <button onClick={() => window.open(`https://farcaster.com/~/compose?text=${encodeURIComponent(`Base-Bingo Tuğla Kırma Oyununda ${score} puan topladım! Sen de katıl 🚀`)}`, "_blank")} className="py-2 bg-indigo-600 font-bold rounded-lg text-center text-white shadow-sm">
+        {/* Yenilenmiş Paylaşım Mesajı */}
+        <button onClick={() => window.open(`https://farcaster.com/~/compose?text=${encodeURIComponent(`Base Brick Breaker oyununda ${score} puan topladım! Sen de katıl ve tuğlaları kır 🚀`)}`, "_blank")} className="py-2 bg-indigo-600 font-bold rounded-lg text-center text-white shadow-sm">
           Share 📤
         </button>
       </div>
