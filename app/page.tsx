@@ -1,28 +1,4 @@
 "use client";
-export const metadata = {
-  title: "Brick Breaker - Base Bingo",
-  description: "Play and smash modern bricks on Base Network",
-  openGraph: {
-    title: "Brick Breaker - Base Bingo",
-    description: "Play and smash modern bricks on Base Network",
-  },
-  other: {
-    "fc:frame": JSON.stringify({
-      version: "next",
-      imageUrl: "https://<URGULAMA_URLINIZ>/og-image.png", // Frame kapak görseli
-      button: {
-        title: "Play Brick Breaker",
-        action: {
-          type: "launch_frame",
-          name: "Brick Breaker",
-          url: "https://<URGULAMA_URLINIZ>/",
-          splashImageUrl: "https://<URGULAMA_URLINIZ>/splash.png",
-          splashBackgroundColor: "#0f172a",
-        },
-      },
-    }),
-  },
-};
 
 import { useState, useEffect } from "react";
 import { useAccount, useSignMessage } from "wagmi"; 
