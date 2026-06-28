@@ -16,7 +16,7 @@ const FIXED_WIDTH = 400;
 const FIXED_HEIGHT = 400; 
 const PADDLE_WIDTH = 80;
 const PADDLE_HEIGHT = 12;
-const BALL_RADIUS = 8;
+const BALL_RADIUS = 7;
 
 export default function BrickBreakerMiniApp() {
   const { address, isConnected } = useAccount();
@@ -37,7 +37,6 @@ export default function BrickBreakerMiniApp() {
   const [attemptsLeft, setAttemptsLeft] = useState(3);
   const [isSdkLoaded, setIsSdkLoaded] = useState(false);
 
-  // REFS (Arka Plan Hafızası)
   const scoreRef = useRef(0);
   const levelRef = useRef(1);
   const livesRef = useRef(4);
@@ -46,10 +45,15 @@ export default function BrickBreakerMiniApp() {
   const paddleWidthRef = useRef(PADDLE_WIDTH);
   const ballXRef = useRef(FIXED_WIDTH / 2);
   const ballYRef = useRef(FIXED_HEIGHT - 30);
-  const ballVxFRef = useRef(3);
-  const ballVyFRef = useRef(-3);
+  
+  // 🕹️ 1. DÜZELTME: Topun başlangıç hızını yavaşlattık (1.8 hız çarpanı)
+  const ballVxFRef = useRef(1.8);
+  const ballVyFRef = useRef(-1.8);
   const bricksRef = useRef([]);
-  const powerUpsRef = useRef([]); // Bonusları takip eden yeni hafıza
+  
+  // 🎁 3. DÜZELTME: Bonus (Power-up) sistemi için state'ler ve referanslar
+  const [activePowerUp, setActivePowerUp] = useState<string | null>(null);
+  const powerUpsRef = useRef([]); // Ekranda düşen bonusları tutar
 
   useEffect(() => { scoreRef.current = score; }, [score]);
   useEffect(() => { levelRef.current = level; }, [level]);
@@ -85,27 +89,23 @@ export default function BrickBreakerMiniApp() {
       osc.connect(gain); gain.connect(ctx.destination);
       if (type === "hit") { osc.frequency.setValueAtTime(160, ctx.currentTime); gain.gain.setValueAtTime(0.05, ctx.currentTime); osc.start(); osc.stop(ctx.currentTime + 0.08); }
       else if (type === "brick") { osc.frequency.setValueAtTime(340, ctx.currentTime); gain.gain.setValueAtTime(0.05, ctx.currentTime); osc.start(); osc.stop(ctx.currentTime + 0.06); }
-      else if (type === "powerup") { osc.frequency.setValueAtTime(440, ctx.currentTime); gain.gain.setValueAtTime(0.08, ctx.currentTime); osc.start(); osc.stop(ctx.currentTime + 0.15); }
       else if (type === "lose") { osc.frequency.setValueAtTime(120, ctx.currentTime); gain.gain.setValueAtTime(0.1, ctx.currentTime); osc.start(); osc.stop(ctx.currentTime + 0.3); }
+      else if (type === "powerup") { osc.frequency.setValueAtTime(440, ctx.currentTime); gain.gain.setValueAtTime(0.08, ctx.currentTime); osc.start(); osc.stop(ctx.currentTime + 0.15); }
     } catch(e){}
   }, [isMuted]);
 
-  // Haritaya Tuğlaları Dizer (Level arttıkça hızlanır/zorlaşır)
-  const generateBricks = (currentLevel) => {
-    const rows = 4;
-    const cols = 6; const padding = 6; const offsetTop = 30; const offsetLeft = 12;
-    const bWidth = (FIXED_WIDTH - offsetLeft * 2 - padding * (cols - 1)) / cols; const bHeight = 16;
+  // 🎨 2. DÜZELTME: Soft/Pastel renk paleti ve 3D gölge tonları
+  const generateBricks = () => {
+    const rows = 4; const cols = 6; const padding = 8; const offsetTop = 35; const offsetLeft = 14;
+    const bWidth = (FIXED_WIDTH - offsetLeft * 2 - padding * (cols - 1)) / cols; const bHeight = 18;
     const arr = [];
-    const colors = ["#4A90E2", "#B37FEB", "#FF4D4F", "#FF9C6E"];
-    const shadows = ["#2C66A3", "#722ED1", "#A61D24", "#D4380D"];
+    
+    // Modern Soft/Pastel Renkler
+    const colors = ["#A0C4FF", "#BDB2FF", "#FFADAD", "#FFD6A5"]; 
+    const shadows = ["#7EA5E0", "#9B8FE0", "#E08E8E", "#E0B788"]; 
 
     for (let r = 0; r < rows; r++) {
       for (let c = 0; c < cols; c++) {
-        // Her tuğlanın %25 ihtimalle içinde bir bonus saklama şansı var
-        const hasPowerUp = Math.random() < 0.25;
-        const types = ["expand", "slow", "fire"];
-        const randomType = types[Math.floor(Math.random() * types.length)];
-
         arr.push({
           x: c * (bWidth + padding) + offsetLeft,
           y: r * (bHeight + padding) + offsetTop,
@@ -114,113 +114,113 @@ export default function BrickBreakerMiniApp() {
           status: 1,
           color: colors[r % colors.length],
           shadowColor: shadows[r % shadows.length],
-          powerUp: hasPowerUp ? randomType : null
+          // Rastgele bazı tuğlalara bonus gizleyelim
+          hasPowerUp: Math.random() < 0.25 ? (Math.random() < 0.5 ? "WIDE" : "LIFE") : null
         });
       }
     }
     bricksRef.current = arr;
-    powerUpsRef.current = []; // Bonusları temizle
   };
 
   const startGame = () => {
     if (gameMode === "tournament" && !isConnected) { alert("Turnuva için lütfen önce sağ üstten cüzdanınızı bağlayın!"); return; }
     setScore(0); setLevel(1); setLives(4);
     paddleWidthRef.current = PADDLE_WIDTH;
-    paddleXRef.current = (FIXED_WIDTH - PADDLE_WIDTH) / 2;
-    generateBricks(1); resetBall(3);
+    setActivePowerUp(null);
+    powerUpsRef.current = [];
+    paddleXRef.current = (FIXED_WIDTH - paddleWidthRef.current) / 2;
+    generateBricks(); 
+    resetBall(1);
     setGameState("playing");
   };
 
-  const nextLevel = () => {
-    const nextLvl = levelRef.current + 1;
-    setLevel(nextLvl);
-    paddleWidthRef.current = PADDLE_WIDTH; // Pedalı normale döndür
-    generateBricks(nextLvl);
-    // Seviye atladıkça top biraz daha hızlanıyor (3 -> 3.5 -> 4...)
-    const newSpeed = 3 + (nextLvl * 0.3);
-    resetBall(newSpeed);
+  // Seviye atladıkça topun hızını kademeli artıran mekanizma
+  const resetBall = (currentLevel = levelRef.current) => {
+    ballXRef.current = FIXED_WIDTH / 2; 
+    ballYRef.current = FIXED_HEIGHT - 35;
+    const speedMultiplier = 1.8 + (currentLevel - 1) * 0.4; // Her seviyede hızı 0.4 birim artar
+    ballVxFRef.current = Math.random() > 0.5 ? speedMultiplier : -speedMultiplier;
+    ballVyFRef.current = -speedMultiplier;
   };
 
-  const resetBall = (speed = 3) => {
-    ballXRef.current = FIXED_WIDTH / 2; ballYRef.current = FIXED_HEIGHT - 35;
-    ballVxFRef.current = speed; ballVyFRef.current = -speed;
+  // Bölüm temizlendi mi kontrolü
+  const checkVictory = () => {
+    const anyLeft = bricksRef.current.some(b => b.status === 1);
+    if (!anyLeft) {
+      const nextLevel = level + 1;
+      setLevel(nextLevel);
+      generateBricks();
+      resetBall(nextLevel);
+    }
   };
 
-  // --- OYUN MOTORU ANA DÖNGÜSÜ ---
+  // Oyun Döngüsü Motoru
   useEffect(() => {
     let animId;
     const update = () => {
       if (gameStateRef.current !== "playing") return;
-
-      // 1. Topu Hareket Ettir
-      ballXRef.current += ballVxFRef.current; ballYRef.current += ballVyFRef.current;
+      
+      // Topun Hareketi
+      ballXRef.current += ballVxFRef.current; 
+      ballYRef.current += ballVyFRef.current;
 
       // Duvar Çarpmaları
       if (ballXRef.current + BALL_RADIUS > FIXED_WIDTH || ballXRef.current - BALL_RADIUS < 0) { ballVxFRef.current = -ballVxFRef.current; playAudio("hit"); }
       if (ballYRef.current - BALL_RADIUS < 0) { ballVyFRef.current = -ballVyFRef.current; playAudio("hit"); }
 
-      // Pedala Çarpma Kontrolü
+      // Pedala Çarpma
       if (ballVyFRef.current > 0 && ballYRef.current + BALL_RADIUS >= FIXED_HEIGHT - PADDLE_HEIGHT - 4 && ballXRef.current >= paddleXRef.current && ballXRef.current <= paddleXRef.current + paddleWidthRef.current) {
-        ballVyFRef.current = -ballVyFRef.current; playAudio("hit");
+        ballVyFRef.current = -ballVyFRef.current; 
+        playAudio("hit");
       }
 
-      // Can Kaybetme Kontrolü
+      // Topun Aşağı Düşmesi
       if (ballYRef.current > FIXED_HEIGHT) {
         playAudio("lose"); const nextLives = livesRef.current - 1; setLives(nextLives);
-        paddleWidthRef.current = PADDLE_WIDTH; // Ölüp doğunca bonus gider
-        if (nextLives <= 0) setGameState("gameover"); else resetBall(3 + (levelRef.current * 0.3));
+        if (nextLives <= 0) setGameState("gameover"); else resetBall();
       }
 
-      // 2. Tuğla Çarpmaları ve Seviye Kontrolü
-      let activeBricks = 0;
+      // Tuğla Çarpmaları
       bricksRef.current.forEach((b) => {
         if (b.status <= 0) return;
-        activeBricks++;
-
         if (ballXRef.current >= b.x && ballXRef.current <= b.x + b.width && ballYRef.current >= b.y && ballYRef.current <= b.y + b.height) {
           b.status = 0; 
           setScore((s) => s + 10); 
           ballVyFRef.current = -ballVyFRef.current; 
           playAudio("brick");
 
-          // Tuğlanın içinden bonus çıkıyor mu?
-          if (b.powerUp) {
+          // Tuğla kırılınca bonus düşürme ihtimali
+          if (b.hasPowerUp) {
             powerUpsRef.current.push({
               x: b.x + b.width / 2,
-              y: b.y,
-              type: b.powerUp,
-              width: 14,
-              height: 14
+              y: b.y + b.height,
+              type: b.hasPowerUp
             });
           }
+          checkVictory();
         }
       });
 
-      // 🛠️ LEVEL ATALAMA KONTROLÜ (Eğer hiç tuğla kalmadıysa bir sonraki levele geç!)
-      if (activeBricks === 0 && bricksRef.current.length > 0) {
-        nextLevel();
-        return;
-      }
-
-      // 3. Düşen Bonusları Hareket Ettir ve Yakala
+      // 🎁 3. DÜZELTME: Bonus kapsüllerinin hareketi (Düşme hızını 1.2'ye sabitleyerek yavaşlattık)
       powerUpsRef.current.forEach((p, idx) => {
-        p.y += 2; // Aşağı doğru süzülüş hızı
+        p.y += 1.2; // Yumuşak ve yavaş düşüş hızı
 
-        // Pedal bonusu yakaladı mı?
-        if (p.y >= FIXED_HEIGHT - PADDLE_HEIGHT - 10 && p.x >= paddleXRef.current && p.x <= paddleXRef.current + paddleWidthRef.current) {
+        // Pedalla yakalama kontrolü
+        if (p.y >= FIXED_HEIGHT - PADDLE_HEIGHT - 10 && p.y <= FIXED_HEIGHT && p.x >= paddleXRef.current && p.x <= paddleXRef.current + paddleWidthRef.current) {
           playAudio("powerup");
-          if (p.type === "expand") {
-            paddleWidthRef.current = PADDLE_WIDTH * 1.4; // Pedalı büyüt
-          } else if (p.type === "slow") {
-            ballVxFRef.current *= 0.75; ballVyFRef.current *= 0.75; // Topu yavaşlat
-          } else if (p.type === "fire") {
-            ballVxFRef.current *= 1.3; ballVyFRef.current *= 1.3; // Topu hızlandır
+          if (p.type === "WIDE") {
+            paddleWidthRef.current = PADDLE_WIDTH * 1.4; // Pedalı genişlet
+            setActivePowerUp("Geniş Pedal");
+            setTimeout(() => { paddleWidthRef.current = PADDLE_WIDTH; setActivePowerUp(null); }, 8000); // 8 saniye sonra normale dön
+          } else if (p.type === "LIFE") {
+            setLives(l => l + 1);
           }
-          powerUpsRef.current.splice(idx, 1); // Yakalanan bonusu sil
+          powerUpsRef.current.splice(idx, 1);
         }
-
-        // Ekrandan çıkıp giden bonusları temizle
-        if (p.y > FIXED_HEIGHT) powerUpsRef.current.splice(idx, 1);
+        // Ekrandan çıkanları sil
+        else if (p.y > FIXED_HEIGHT) {
+          powerUpsRef.current.splice(idx, 1);
+        }
       });
     };
 
@@ -230,30 +230,62 @@ export default function BrickBreakerMiniApp() {
       ctx.clearRect(0, 0, FIXED_WIDTH, FIXED_HEIGHT);
       ctx.fillStyle = "#0f172a"; ctx.fillRect(0, 0, FIXED_WIDTH, FIXED_HEIGHT);
 
-      // Tuğlaları Çiz
+      // 🎨 2. DÜZELTME: Gelişmiş Yuvarlak Köşeli ve 3D Parlamalı Tuğla Çizimi
       bricksRef.current.forEach((b) => {
         if (b.status <= 0) return;
-        ctx.fillStyle = b.shadowColor; ctx.fillRect(b.x, b.y + 2, b.width, b.height);
-        ctx.fillStyle = b.color; ctx.fillRect(b.x, b.y, b.width, b.height);
+        
+        ctx.save();
+        const radius = 5; // Köşe yuvarlaklığı derecesi
+
+        // Alt 3D Gölge Katmanı
+        ctx.fillStyle = b.shadowColor;
+        ctx.beginPath();
+        ctx.roundRect(b.x, b.y + 3, b.width, b.height, radius);
+        ctx.fill();
+
+        // Ana Soft Renkli Gövde Katmanı
+        ctx.fillStyle = b.color;
+        ctx.beginPath();
+        ctx.roundRect(b.x, b.y, b.width, b.height, radius);
+        ctx.fill();
+
+        // Üst 3D Parlama (İç Işık) Efekti
+        ctx.fillStyle = "rgba(255, 255, 255, 0.25)";
+        ctx.beginPath();
+        ctx.roundRect(b.x + 2, b.y + 2, b.width - 4, 4, 2);
+        ctx.fill();
+
+        ctx.restore();
       });
 
-      // 🎁 Bonus Kutularını Ekrana Çiz
+      // Bonus Kapsüllerini Çizme
       powerUpsRef.current.forEach((p) => {
-        if (p.type === "expand") { ctx.fillStyle = "#38bdf8"; ctx.font = "bold 12px sans-serif"; ctx.fillText("📏", p.x, p.y); }
-        else if (p.type === "slow") { ctx.fillStyle = "#4ade80"; ctx.font = "bold 12px sans-serif"; ctx.fillText("❄️", p.x, p.y); }
-        else if (p.type === "fire") { ctx.fillStyle = "#f87171"; ctx.font = "bold 12px sans-serif"; ctx.fillText("🔥", p.x, p.y); }
+        ctx.fillStyle = p.type === "WIDE" ? "#38bdf8" : "#f43f5e";
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 8, 0, Math.PI * 2);
+        ctx.fill();
+        // İçine küçük bir simge ekleyelim
+        ctx.fillStyle = "#ffffff";
+        ctx.font = "bold 9px sans-serif";
+        ctx.fillText(p.type === "WIDE" ? "↔️" : "❤️", p.x - 5, p.y + 3);
       });
 
-      // Pedalı ve Topu Çiz (Dinamik genişlik kullanarak)
-      ctx.fillStyle = "#3b82f6"; ctx.fillRect(paddleXRef.current, FIXED_HEIGHT - PADDLE_HEIGHT - 4, paddleWidthRef.current, PADDLE_HEIGHT);
-      ctx.fillStyle = "#ef4444"; ctx.beginPath(); ctx.arc(ballXRef.current, ballYRef.current, BALL_RADIUS, 0, Math.PI * 2); ctx.fill();
+      // Pedalı Çizme (Genişlik dinamik değişebilir)
+      ctx.fillStyle = "#3b82f6";
+      ctx.beginPath();
+      ctx.roundRect(paddleXRef.current, FIXED_HEIGHT - PADDLE_HEIGHT - 4, paddleWidthRef.current, PADDLE_HEIGHT, 4);
+      ctx.fill();
+
+      // Topu Çizme
+      ctx.fillStyle = "#f43f5e"; ctx.beginPath(); ctx.arc(ballXRef.current, ballYRef.current, BALL_RADIUS, 0, Math.PI * 2); ctx.fill();
     };
 
     const loop = () => { update(); render(); animId = requestAnimationFrame(loop); };
     if (gameState === "playing") animId = requestAnimationFrame(loop); else render();
     return () => cancelAnimationFrame(animId);
-  }, [gameState, playAudio]);
+  }, [gameState, playAudio, level]);
 
+  // Kontroller
   const handlePointerMove = (e) => {
     if (gameState !== "playing" || !canvasRef.current) return;
     const rect = canvasRef.current.getBoundingClientRect();
@@ -299,14 +331,14 @@ export default function BrickBreakerMiniApp() {
         </button>
       </div>
 
-      {/* DURUM GÖSTERGELERİ */}
+      {/* DURUM GÖSTERGELERI */}
       <div className="grid grid-cols-3 text-center text-[11px] bg-slate-950 py-1.5 px-2 rounded-xl border border-slate-800 font-mono gap-1">
         <div>SCORE: <span className="text-emerald-400 font-bold">{score}</span></div>
         <div>LIVES: <span className="text-red-400 font-bold">{"❤️".repeat(Math.max(0, lives))}</span></div>
         <div>LEVEL: <span className="text-purple-400 font-bold">{level}</span></div>
       </div>
 
-      {/* OYUN KANVASI */}
+      {/* OYUN CANVAS EKRANI */}
       <div className="relative flex justify-center bg-slate-950 rounded-xl overflow-hidden border border-slate-800 aspect-[400/400] w-full">
         <canvas
           ref={canvasRef}
@@ -317,6 +349,13 @@ export default function BrickBreakerMiniApp() {
           onTouchStart={handleTouchMove}
           className="w-full h-full block touch-none cursor-crosshair"
         />
+
+        {/* Aktif Güç Göstergesi */}
+        {activePowerUp && (
+          <div className="absolute top-2 left-2 bg-blue-600/80 backdrop-blur-sm px-2 py-0.5 rounded text-[9px] font-bold tracking-wide animate-pulse">
+            🔥 {activePowerUp} AKTİF!
+          </div>
+        )}
 
         {gameState !== "playing" && (
           <div className="absolute inset-0 bg-slate-950/90 backdrop-blur-sm flex flex-col items-center justify-center p-4 text-center">
