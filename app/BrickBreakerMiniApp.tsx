@@ -4,7 +4,21 @@
 
 import React, { useEffect, useRef, useState, useCallback } from "react";
 import { createClient } from "@supabase/supabase-js";
-import { useAccount } from "wagmi";
+import { useAccount, useConnect, useDisconnect } from "wagmi";
+
+// Farcaster Frames v2 SDK Dinamik Yükleme (SSR Güvenli)
+let farcasterSdk: any = null;
+if (typeof window !== "undefined") {
+  import("@farcaster/frame-sdk").then((mod) => {
+    farcasterSdk = mod.default;
+    // Farcaster ortamındaysak Frame'in hazır olduğunu bildir
+    try {
+      farcasterSdk.actions.ready();
+    } catch (e) {
+      console.log("Farcaster SDK Ready hatası (Muhtemelen normal tarayıcı):", e);
+    }
+  });
+}
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
@@ -26,8 +40,8 @@ interface Brick {
   height: number;
   status: number;
   type: "normal" | "double" | "triple" | "speed" | "slow" | "wide" | "narrow" | "laser" | "magnet";
-  color: string;      // Tuğlanın ana pastel rengi
-  shadowColor: string; // 3D alt derinlik için koyu tonu
+  color: string;
+  shadowColor: string;
 }
 
 interface Particle {
@@ -54,7 +68,10 @@ interface LeaderboardRow {
 }
 
 export default function BrickBreakerMiniApp() {
-  const { address } = useAccount();
+  const { address, isConnected } = useAccount();
+  const { connect, connectors } = useConnect();
+  const { disconnect } = useDisconnect();
+  
   const userWallet = address || "Guest";
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -124,6 +141,17 @@ export default function BrickBreakerMiniApp() {
   useEffect(() => { playerXpRef.current = playerXp; }, [playerXp]);
   useEffect(() => { streakRef.current = streak; }, [streak]);
 
+  // Farcaster Context Başlatma
+  useEffect(() => {
+    if (farcasterSdk) {
+      try {
+        farcasterSdk.actions.ready();
+      } catch (e) {
+        console.error(e);
+      }
+    }
+  }, []);
+
   // --- AUDIO SİSTEMİ ---
   const playAudio = useCallback((type: "hit" | "brick" | "powerup" | "lose" | "victory" | "laser") => {
     if (isMuted) return;
@@ -185,7 +213,6 @@ export default function BrickBreakerMiniApp() {
     }
   }, [isMuted]);
 
-  // --- ZAMAN VE HAFTA HESAPLAMA ---
   const getUTCWeekString = useCallback(() => {
     const d = new Date();
     const utcTarget = new Date(d.valueOf() + d.getTimezoneOffset() * 60000);
@@ -195,7 +222,6 @@ export default function BrickBreakerMiniApp() {
     return `${utcTarget.getFullYear()}-W${weekNo < 10 ? "0" + weekNo : weekNo}`;
   }, []);
 
-  // --- VERİTABANI VE PROFIL YÜKLEME ---
   const loadProfileAndLeaderboard = useCallback(async () => {
     if (!userWallet || userWallet === "Guest") return;
     const currentWeek = getUTCWeekString();
@@ -242,7 +268,6 @@ export default function BrickBreakerMiniApp() {
     }
   }, [userWallet, getUTCWeekString]);
 
-  // --- SKOR KAYDETME VE SEVİYE ATLAMA ---
   const saveTournamentScore = useCallback(async (finalScore: number) => {
     if (!userWallet || userWallet === "Guest" || gameModeRef.current !== "tournament") return;
     const todayStr = new Date().toISOString().split("T")[0];
@@ -333,7 +358,6 @@ export default function BrickBreakerMiniApp() {
     }
   };
 
-  // --- GÖRSELDEKİ SOFT PASTEL VE MODERN 3D RENK YAPISI ---
   const generateBricks = (lvl: number) => {
     const rows = 4 + Math.min(lvl, 3);
     const cols = 6;
@@ -356,18 +380,17 @@ export default function BrickBreakerMiniApp() {
         }
 
         let hp = 1;
-        // Görseldeki gibi pürüzsüz pastel ana renkler ve 3D alt gölgeleri (koyu tonları)
-        let color = "#4A90E2";       // Pastel Gök Mavisi (Normal)
-        let shadowColor = "#2C66A3"; 
+        let color = "#4A90E2";
+        let shadowColor = "#2C66A3";
 
-        if (t === "double") { hp = 2; color = "#B37FEB"; shadowColor = "#722ED1"; } // Pastel Lila
-        if (t === "triple") { hp = 3; color = "#FF4D4F"; shadowColor = "#A61D24"; } // Pastel Kırmızı
-        if (t === "speed") { color = "#FF9C6E"; shadowColor = "#D4380D"; }         // Pastel Turuncu
-        if (t === "slow") { color = "#5CCBD3"; shadowColor = "#006D75"; }          // Pastel Turkuaz
-        if (t === "wide") { color = "#73D13D"; shadowColor = "#389E0D"; }          // Pastel Yeşil
-        if (t === "narrow") { color = "#FFEC3D"; shadowColor = "#D4B106"; }        // Pastel Sarı
-        if (t === "laser") { color = "#FF85C0"; shadowColor = "#C41D7F"; }         // Pastel Pembe
-        if (t === "magnet") { color = "#2F54EB"; shadowColor = "#1D39C4"; }        // Klasik İndigo Mavi
+        if (t === "double") { hp = 2; color = "#B37FEB"; shadowColor = "#722ED1"; }
+        if (t === "triple") { hp = 3; color = "#FF4D4F"; shadowColor = "#A61D24"; }
+        if (t === "speed") { color = "#FF9C6E"; shadowColor = "#D4380D"; }
+        if (t === "slow") { color = "#5CCBD3"; shadowColor = "#006D75"; }
+        if (t === "wide") { color = "#73D13D"; shadowColor = "#389E0D"; }
+        if (t === "narrow") { color = "#FFEC3D"; shadowColor = "#D4B106"; }
+        if (t === "laser") { color = "#FF85C0"; shadowColor = "#C41D7F"; }
+        if (t === "magnet") { color = "#2F54EB"; shadowColor = "#1D39C4"; }
 
         arr.push({
           x: c * (bWidth + padding) + offsetLeft,
@@ -385,8 +408,12 @@ export default function BrickBreakerMiniApp() {
   };
 
   const startGame = () => {
+    if (gameMode === "tournament" && !isConnected) {
+      alert("Turnuva modunda oynamak için önce cüzdanınızı bağlamalısınız!");
+      return;
+    }
     if (gameMode === "tournament" && attemptsLeft <= 0) {
-      alert("Turnuva hakkınız kalmadı! Practice modda oynayabilirsiniz.");
+      alert("Bugünkü turnuva hakkınız kalmadı! Practice modda antrenman yapabilirsiniz.");
       return;
     }
     setScore(0);
@@ -457,7 +484,6 @@ export default function BrickBreakerMiniApp() {
     }
   };
 
-  // --- GAME LOOP ---
   useEffect(() => {
     let animId: number;
 
@@ -633,43 +659,31 @@ export default function BrickBreakerMiniApp() {
         ctx.beginPath(); ctx.moveTo(0, j); ctx.lineTo(FIXED_WIDTH, j); ctx.stroke();
       }
 
-      // --- MODERN 3D VE YUMUŞAK PASTEL TUĞLA ÇİZİMİ (GÖRSELDEKİ STİL) ---
       bricksRef.current.forEach((b) => {
         if (b.status <= 0) return;
 
-        // 1. ADIM: 3D Derinlik için Alt Kalınlık/Gölge Katmanı
         ctx.fillStyle = b.shadowColor;
         ctx.beginPath();
-        if (ctx.roundRect) {
-          ctx.roundRect(b.x, b.y + 3, b.width, b.height, 5); // 3px aşağıda gölge katmanı
-        } else {
-          ctx.rect(b.x, b.y + 3, b.width, b.height);
-        }
+        if (ctx.roundRect) { ctx.roundRect(b.x, b.y + 3, b.width, b.height, 5); } 
+        else { ctx.rect(b.x, b.y + 3, b.width, b.height); }
         ctx.fill();
 
-        // 2. ADIM: Ana Üst Pastel Gövde Çizimi
         ctx.fillStyle = b.color;
         ctx.beginPath();
-        if (ctx.roundRect) {
-          ctx.roundRect(b.x, b.y, b.width, b.height, 5); // Yumuşak yuvarlatılmış modern köşeler
-        } else {
-          ctx.rect(b.x, b.y, b.width, b.height);
-        }
+        if (ctx.roundRect) { ctx.roundRect(b.x, b.y, b.width, b.height, 5); } 
+        else { ctx.rect(b.x, b.y, b.width, b.height); }
         ctx.fill();
         
-        // 3. ADIM: Yumuşak Plastik/Mat Doku ve Işık Yansıması
         ctx.fillStyle = "rgba(255, 255, 255, 0.16)";
         ctx.fillRect(b.x + 1, b.y + 1, b.width - 2, b.height / 3.5);
       });
 
-      // Modern Yumuşak Hatlara Sahip Palet Tasarımı
       ctx.fillStyle = selectedSkin === "Gold" ? "#f59e0b" : selectedSkin === "Mint" ? "#10b981" : "#3b82f6";
       ctx.beginPath();
       if (ctx.roundRect) { ctx.roundRect(paddleXRef.current, FIXED_HEIGHT - PADDLE_HEIGHT - 4, paddleWidthRef.current, PADDLE_HEIGHT, 6); } 
       else { ctx.rect(paddleXRef.current, FIXED_HEIGHT - PADDLE_HEIGHT - 4, paddleWidthRef.current, PADDLE_HEIGHT); }
       ctx.fill();
 
-      // Soft Top Parlaması
       ctx.shadowBlur = 10;
       ctx.shadowColor = "#f43f5e";
       ctx.fillStyle = "#ef4444";
@@ -707,41 +721,66 @@ export default function BrickBreakerMiniApp() {
     }
 
     return () => cancelAnimationFrame(animId);
-  }, [gameState, selectedSkin, playAudio, saveTournamentScore]);
+  }, [gameState, selectedSkin, playAudio, saveTournamentScore, isConnected]);
 
   const switchMode = () => { setGameMode((m) => (m === "tournament" ? "practice" : "tournament")); };
+  
   const shareScore = () => {
     const text = `Base-Bingo Tuğla Kırma Oyununda ${score} skor ürettim! Gel ve rekorumu kır! 🚀`;
-    window.open(`https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}`, "_blank");
+    // Farcaster içindeyse Farcaster paylaşım aksiyonunu tetikle, yoksa Twitter aç
+    if (farcasterSdk) {
+      window.location.href = `https://farcaster.com/~/compose?text=${encodeURIComponent(text)}`;
+    } else {
+      window.open(`https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}`, "_blank");
+    }
+  };
+
+  // Base.app Web3 Cüzdan Tetikleyicisi
+  const handleWalletConnect = () => {
+    if (isConnected) {
+      disconnect();
+    } else {
+      // Mevcut ilk konnektörü (Örn: Coinbase Wallet / Injection) otomatik tetikle
+      if (connectors.length > 0) {
+        connect({ connector: connectors[0] });
+      }
+    }
   };
 
   return (
     <div className="w-full max-w-md mx-auto p-4 bg-slate-950 border border-slate-800 rounded-3xl text-white text-sm shadow-2xl flex flex-col gap-4">
       
-      {/* 1. ÜST PANEL */}
+      {/* 1. ÜST PANEL & WEB3 CONNECT BUTTON */}
       <div className="flex justify-between items-center border-b border-slate-800 pb-3">
         <div>
           <h1 className="text-xl font-black tracking-wider bg-clip-text text-transparent bg-gradient-to-r from-blue-400 via-indigo-400 to-purple-400">
             BRICK BREAKER
           </h1>
           <div className="flex items-center gap-2 mt-0.5">
-            <span className="text-[11px] text-slate-500 font-medium">Phase-2 (No mint)</span>
+            <span className="text-[11px] text-slate-500 font-medium">Base & Farcaster Ready</span>
             <button onClick={() => setIsMuted(!isMuted)} className="text-xs text-slate-400 hover:text-white">
               {isMuted ? "🔇" : "🔊"}
             </button>
           </div>
         </div>
-        <div className="text-right">
-          <div className="text-xs text-purple-400 font-bold mb-0.5 tracking-tight">
-            {lives > 0 ? "💜".repeat(lives) : <span className="text-red-500 font-bold">ELENDİ</span>}
-          </div>
-          <div className="text-xs font-semibold text-slate-400">
-            SCORE: <span className="text-emerald-400 text-base font-black">{score}</span>
-          </div>
-        </div>
+        
+        {/* Base.app Uyumlu Cüzdan Butonu */}
+        <button
+          onClick={handleWalletConnect}
+          className={`px-3 py-1.5 rounded-xl font-bold text-xs transition-all active:scale-95 ${
+            isConnected 
+              ? "bg-slate-800 text-emerald-400 border border-emerald-500/30" 
+              : "bg-blue-600 hover:bg-blue-500 text-white shadow-lg shadow-blue-500/20"
+          }`}
+        >
+          {isConnected 
+            ? `${address?.slice(0, 4)}...${address?.slice(-4)}` 
+            : "Connect Wallet"
+          }
+        </button>
       </div>
 
-      {/* 2. OYUN ALANI (CANVAS + START OVERLAY) */}
+      {/* 2. OYUN ALANI */}
       <div className="relative flex justify-center bg-slate-900 rounded-2xl overflow-hidden border border-slate-800 shadow-inner">
         <canvas
           ref={canvasRef}
@@ -825,7 +864,7 @@ export default function BrickBreakerMiniApp() {
         </div>
       </div>
 
-      {/* 4. DENEME VE KONTROL PANELİ */}
+      {/* 4. DENEME PANELİ */}
       <div className="bg-slate-900/60 p-3 rounded-xl border border-slate-800 text-xs flex flex-col gap-2">
         <div className="flex justify-between items-center">
           <span className="text-slate-300 font-medium">Attempts Left:</span>
@@ -865,36 +904,21 @@ export default function BrickBreakerMiniApp() {
         </button>
         <button
           onClick={shareScore}
-          className="py-3 bg-blue-600 hover:bg-blue-500 font-bold rounded-xl text-white transition-all active:scale-95 text-center shadow-lg shadow-blue-500/10"
+          className="py-3 bg-indigo-600 hover:bg-indigo-500 font-bold rounded-xl text-white transition-all active:scale-95 text-center shadow-lg shadow-indigo-500/10"
         >
-          Share Challenge 📤
+          Share Frame 📤
         </button>
       </div>
 
-      {/* 7. LİDERLİK TABLOSU VE GÖRÜNÜM SEÇENEKLERİ */}
+      {/* 7. LİDERLİK TABLOSU */}
       <div className="bg-slate-900/40 p-3 rounded-xl border border-slate-800 text-xs flex flex-col gap-2">
         <div className="flex justify-between items-center border-b border-slate-800/60 pb-2">
           <span className="font-bold text-slate-400 tracking-wide">Top 10 Leaderboard</span>
           
           <div className="flex gap-1 text-[10px] bg-slate-950 p-0.5 rounded border border-slate-800">
-            <button 
-              onClick={() => setSelectedSkin("Default")} 
-              className={`px-2 py-0.5 rounded-md transition-all ${selectedSkin === "Default" ? "bg-blue-600 font-bold text-white" : "text-slate-500"}`}
-            >
-              Neon
-            </button>
-            <button 
-              onClick={() => playerLv >= 4 ? setSelectedSkin("Gold") : alert("LV 4 kilitli!")} 
-              className={`px-2 py-0.5 rounded-md transition-all ${selectedSkin === "Gold" ? "bg-amber-500 font-bold text-slate-950" : "text-slate-500"}`}
-            >
-              Gold
-            </button>
-            <button 
-              onClick={() => playerLv >= 8 ? setSelectedSkin("Mint") : alert("LV 8 kilitli!")} 
-              className={`px-2 py-0.5 rounded-md transition-all ${selectedSkin === "Mint" ? "bg-emerald-500 font-bold text-slate-950" : "text-slate-500"}`}
-            >
-              Mint
-            </button>
+            <button onClick={() => setSelectedSkin("Default")} className={`px-2 py-0.5 rounded-md transition-all ${selectedSkin === "Default" ? "bg-blue-600 font-bold text-white" : "text-slate-500"}`}>Neon</button>
+            <button onClick={() => playerLv >= 4 ? setSelectedSkin("Gold") : alert("LV 4 kilitli!")} className={`px-2 py-0.5 rounded-md transition-all ${selectedSkin === "Gold" ? "bg-amber-500 font-bold text-slate-950" : "text-slate-500"}`}>Gold</button>
+            <button onClick={() => playerLv >= 8 ? setSelectedSkin("Mint") : alert("LV 8 kilitli!")} className={`px-2 py-0.5 rounded-md transition-all ${selectedSkin === "Mint" ? "bg-emerald-500 font-bold text-slate-950" : "text-slate-500"}`}>Mint</button>
           </div>
         </div>
 
