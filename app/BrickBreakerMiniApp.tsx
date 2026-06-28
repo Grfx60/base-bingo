@@ -13,7 +13,7 @@ const safeSupabaseAnonKey = supabaseAnonKey || "dummy-key";
 const supabase = createClient(safeSupabaseUrl, safeSupabaseAnonKey);
 
 const FIXED_WIDTH = 400;
-const FIXED_HEIGHT = 400; // Ekranın taşmaması için yüksekliği 400'e optimize ettik
+const FIXED_HEIGHT = 400; 
 const PADDLE_WIDTH = 80;
 const PADDLE_HEIGHT = 12;
 const BALL_RADIUS = 8;
@@ -54,15 +54,20 @@ export default function BrickBreakerMiniApp() {
   useEffect(() => { livesRef.current = lives; }, [lives]);
   useEffect(() => { gameStateRef.current = gameState; }, [gameState]);
 
-  // Farcaster Tetikleyici
+  // 🛠️ YENİ MINIAPP-SDK RESMİ DOKÜMANTASYON TETİKLEYİCİSİ
   useEffect(() => {
     const triggerFarcasterReady = async () => {
       try {
-        const sdk = (await import("@farcaster/frame-sdk")).default;
+        // Yeni miniapp-sdk paketini dinamik yüklüyoruz
+        const { sdk } = await import("@farcaster/miniapp-sdk");
         if (sdk && sdk.actions) {
+          // Açılış ekranını otomatik kapatan büyülü kod
           await sdk.actions.ready();
+          console.log("Yeni Farcaster Mini App Ready tetiklendi!");
         }
-      } catch (e) {}
+      } catch (e) {
+        console.log("Farcaster SDK normal tarayıcıda pasif:", e);
+      }
     };
 
     if (document.readyState === "complete") {
@@ -90,7 +95,7 @@ export default function BrickBreakerMiniApp() {
   }, [isMuted]);
 
   const generateBricks = () => {
-    const rows = 4; // Farcaster ekran yüksekliği için dikey tuğla sırasını 4'e indirdik
+    const rows = 4;
     const cols = 6; const padding = 6; const offsetTop = 30; const offsetLeft = 12;
     const bWidth = (FIXED_WIDTH - offsetLeft * 2 - padding * (cols - 1)) / cols; const bHeight = 16;
     const arr = [];
@@ -126,7 +131,6 @@ export default function BrickBreakerMiniApp() {
     ballVxFRef.current = 3; ballVyFRef.current = -3;
   };
 
-  // Oyun Motoru Döngüsü
   useEffect(() => {
     let animId;
     const update = () => {
@@ -184,7 +188,7 @@ export default function BrickBreakerMiniApp() {
   return (
     <div className="w-full max-w-md mx-auto p-4 bg-slate-900 border border-slate-800 rounded-2xl text-white shadow-2xl flex flex-col gap-3 select-none overflow-hidden">
       
-      {/* ÜST PANEL: BAŞLIK VE CÜZDAN */}
+      {/* ÜST PANEL */}
       <div className="flex justify-between items-center border-b border-slate-800 pb-2">
         <div>
           <h1 className="text-base font-black tracking-wider bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-purple-400">
@@ -202,7 +206,7 @@ export default function BrickBreakerMiniApp() {
         </button>
       </div>
 
-      {/* DURUM GÖSTERGELERİ */}
+      {/* DURUM GÖSTERGELERI */}
       <div className="grid grid-cols-3 text-center text-[11px] bg-slate-950 py-1.5 px-2 rounded-xl border border-slate-800 font-mono gap-1">
         <div>SCORE: <span className="text-emerald-400 font-bold">{score}</span></div>
         <div>LIVES: <span className="text-red-400 font-bold">{"❤️".repeat(Math.max(0, lives))}</span></div>
@@ -242,7 +246,7 @@ export default function BrickBreakerMiniApp() {
         )}
       </div>
 
-      {/* ALT PANEL: OYUNCU İSTATİSTİKLERİ VE BUTONLAR */}
+      {/* ALT PANEL */}
       <div className="grid grid-cols-2 gap-2 text-[10px] bg-slate-950 p-2 rounded-xl border border-slate-800">
         <div className="flex flex-col justify-center">
           <span className="text-slate-500 font-bold text-[9px] uppercase">Player Status</span>
