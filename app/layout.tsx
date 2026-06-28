@@ -6,6 +6,10 @@ import { RootProvider } from "./rootProvider";
 import "./globals.css";
 
 export async function generateMetadata(): Promise<Metadata> {
+  // Oyununuza yakışacak modern bir kapak / açılış görseli URL'si
+  // Kendi özel görselinizi yüklediğinizde bu linki güncelleyebilirsiniz
+  const customSplashImage = "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?q=80&w=1000&auto=format&fit=crop";
+
   return {
     title: minikitConfig.miniapp.name,
     description: minikitConfig.miniapp.description,
@@ -14,21 +18,20 @@ export async function generateMetadata(): Promise<Metadata> {
       description: minikitConfig.miniapp.description,
     },
     other: {
-      // Base App ID doğrulaması
       "base:app_id": "6a3eab37fb80a74d69497aa5",
 
-      // Farcaster Frames v2 Yapılandırması (Gerçek Adres Tanımlandı)
+      // Farcaster v2 Konfigürasyonu
       "fc:frame": JSON.stringify({
         version: "next",
-        imageUrl: minikitConfig.miniapp.heroImageUrl,
+        imageUrl: customSplashImage, // Mağazada ve aramalarda görünecek ana resim
         button: {
           title: `Play ${minikitConfig.miniapp.name}`,
           action: {
             type: "launch_frame",
             name: minikitConfig.miniapp.name,
             url: "https://base-bingo-rho.vercel.app/",
-            splashImageUrl: minikitConfig.miniapp.heroImageUrl,
-            splashBackgroundColor: "#0f172a",
+            splashImageUrl: customSplashImage, // Açılışta (Splash) görünecek özel resminiz
+            splashBackgroundColor: "#020617", // Arka plan koyu gece mavisi
           },
         },
       }),
