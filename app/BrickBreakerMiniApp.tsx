@@ -23,7 +23,6 @@ export default function BrickBreakerMiniApp() {
   const { connect, connectors } = useConnect();
   const { disconnect } = useDisconnect();
   
-  const userWallet = address || "Guest";
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
   // --- OYUN AYARLARI ---
@@ -38,6 +37,7 @@ export default function BrickBreakerMiniApp() {
   const [attemptsLeft, setAttemptsLeft] = useState(3);
   const [isSdkLoaded, setIsSdkLoaded] = useState(false);
 
+  // REFS (Arka Plan Hafızası)
   const scoreRef = useRef(0);
   const levelRef = useRef(1);
   const livesRef = useRef(4);
@@ -49,6 +49,7 @@ export default function BrickBreakerMiniApp() {
   const ballVxFRef = useRef(3);
   const ballVyFRef = useRef(-3);
   const bricksRef = useRef([]);
+  const powerUpsRef = useRef([]); // Bonusları takip eden yeni hafıza
 
   useEffect(() => { scoreRef.current = score; }, [score]);
   useEffect(() => { levelRef.current = level; }, [level]);
@@ -72,7 +73,7 @@ export default function BrickBreakerMiniApp() {
     initFarcasterMiniApp();
   }, []);
 
-  // Yapay Ses Üretici
+  // Ses Efektleri
   const playAudio = useCallback((type) => {
     if (isMuted) return;
     try {
@@ -84,12 +85,15 @@ export default function BrickBreakerMiniApp() {
       osc.connect(gain); gain.connect(ctx.destination);
       if (type === "hit") { osc.frequency.setValueAtTime(160, ctx.currentTime); gain.gain.setValueAtTime(0.05, ctx.currentTime); osc.start(); osc.stop(ctx.currentTime + 0.08); }
       else if (type === "brick") { osc.frequency.setValueAtTime(340, ctx.currentTime); gain.gain.setValueAtTime(0.05, ctx.currentTime); osc.start(); osc.stop(ctx.currentTime + 0.06); }
+      else if (type === "powerup") { osc.frequency.setValueAtTime(440, ctx.currentTime); gain.gain.setValueAtTime(0.08, ctx.currentTime); osc.start(); osc.stop(ctx.currentTime + 0.15); }
       else if (type === "lose") { osc.frequency.setValueAtTime(120, ctx.currentTime); gain.gain.setValueAtTime(0.1, ctx.currentTime); osc.start(); osc.stop(ctx.currentTime + 0.3); }
     } catch(e){}
   }, [isMuted]);
 
-  const generateBricks = () => {
-    const rows = 4; const cols = 6; const padding = 6; const offsetTop = 30; const offsetLeft = 12;
+  // Haritaya Tuğlaları Dizer (Level arttıkça hızlanır/zorlaşır)
+  const generateBricks = (currentLevel) => {
+    const rows = 4;
+    const cols = 6; const padding = 6; const offsetTop = 30; const offsetLeft = 12;
     const bWidth = (FIXED_WIDTH - offsetLeft * 2 - padding * (cols - 1)) / cols; const bHeight = 16;
     const arr = [];
     const colors = ["#4A90E2", "#B37FEB", "#FF4D4F", "#FF9C6E"];
@@ -97,6 +101,11 @@ export default function BrickBreakerMiniApp() {
 
     for (let r = 0; r < rows; r++) {
       for (let c = 0; c < cols; c++) {
+        // Her tuğlanın %25 ihtimalle içinde bir bonus saklama şansı var
+        const hasPowerUp = Math.random() < 0.25;
+        const types = ["expand", "slow", "fire"];
+        const randomType = types[Math.floor(Math.random() * types.length)];
+
         arr.push({
           x: c * (bWidth + padding) + offsetLeft,
           y: r * (bHeight + padding) + offsetTop,
@@ -105,49 +114,113 @@ export default function BrickBreakerMiniApp() {
           status: 1,
           color: colors[r % colors.length],
           shadowColor: shadows[r % shadows.length],
+          powerUp: hasPowerUp ? randomType : null
         });
       }
     }
     bricksRef.current = arr;
+    powerUpsRef.current = []; // Bonusları temizle
   };
 
   const startGame = () => {
     if (gameMode === "tournament" && !isConnected) { alert("Turnuva için lütfen önce sağ üstten cüzdanınızı bağlayın!"); return; }
     setScore(0); setLevel(1); setLives(4);
-    paddleXRef.current = (FIXED_WIDTH - paddleWidthRef.current) / 2;
-    generateBricks(); resetBall();
+    paddleWidthRef.current = PADDLE_WIDTH;
+    paddleXRef.current = (FIXED_WIDTH - PADDLE_WIDTH) / 2;
+    generateBricks(1); resetBall(3);
     setGameState("playing");
   };
 
-  const resetBall = () => {
-    ballXRef.current = FIXED_WIDTH / 2; ballYRef.current = FIXED_HEIGHT - 35;
-    ballVxFRef.current = 3; ballVyFRef.current = -3;
+  const nextLevel = () => {
+    const nextLvl = levelRef.current + 1;
+    setLevel(nextLvl);
+    paddleWidthRef.current = PADDLE_WIDTH; // Pedalı normale döndür
+    generateBricks(nextLvl);
+    // Seviye atladıkça top biraz daha hızlanıyor (3 -> 3.5 -> 4...)
+    const newSpeed = 3 + (nextLvl * 0.3);
+    resetBall(newSpeed);
   };
 
-  // Oyun Döngüsü Motoru
+  const resetBall = (speed = 3) => {
+    ballXRef.current = FIXED_WIDTH / 2; ballYRef.current = FIXED_HEIGHT - 35;
+    ballVxFRef.current = speed; ballVyFRef.current = -speed;
+  };
+
+  // --- OYUN MOTORU ANA DÖNGÜSÜ ---
   useEffect(() => {
     let animId;
     const update = () => {
       if (gameStateRef.current !== "playing") return;
+
+      // 1. Topu Hareket Ettir
       ballXRef.current += ballVxFRef.current; ballYRef.current += ballVyFRef.current;
 
+      // Duvar Çarpmaları
       if (ballXRef.current + BALL_RADIUS > FIXED_WIDTH || ballXRef.current - BALL_RADIUS < 0) { ballVxFRef.current = -ballVxFRef.current; playAudio("hit"); }
       if (ballYRef.current - BALL_RADIUS < 0) { ballVyFRef.current = -ballVyFRef.current; playAudio("hit"); }
 
+      // Pedala Çarpma Kontrolü
       if (ballVyFRef.current > 0 && ballYRef.current + BALL_RADIUS >= FIXED_HEIGHT - PADDLE_HEIGHT - 4 && ballXRef.current >= paddleXRef.current && ballXRef.current <= paddleXRef.current + paddleWidthRef.current) {
         ballVyFRef.current = -ballVyFRef.current; playAudio("hit");
       }
 
+      // Can Kaybetme Kontrolü
       if (ballYRef.current > FIXED_HEIGHT) {
         playAudio("lose"); const nextLives = livesRef.current - 1; setLives(nextLives);
-        if (nextLives <= 0) setGameState("gameover"); else resetBall();
+        paddleWidthRef.current = PADDLE_WIDTH; // Ölüp doğunca bonus gider
+        if (nextLives <= 0) setGameState("gameover"); else resetBall(3 + (levelRef.current * 0.3));
       }
 
+      // 2. Tuğla Çarpmaları ve Seviye Kontrolü
+      let activeBricks = 0;
       bricksRef.current.forEach((b) => {
         if (b.status <= 0) return;
+        activeBricks++;
+
         if (ballXRef.current >= b.x && ballXRef.current <= b.x + b.width && ballYRef.current >= b.y && ballYRef.current <= b.y + b.height) {
-          b.status = 0; setScore((s) => s + 10); ballVyFRef.current = -ballVyFRef.current; playAudio("brick");
+          b.status = 0; 
+          setScore((s) => s + 10); 
+          ballVyFRef.current = -ballVyFRef.current; 
+          playAudio("brick");
+
+          // Tuğlanın içinden bonus çıkıyor mu?
+          if (b.powerUp) {
+            powerUpsRef.current.push({
+              x: b.x + b.width / 2,
+              y: b.y,
+              type: b.powerUp,
+              width: 14,
+              height: 14
+            });
+          }
         }
+      });
+
+      // 🛠️ LEVEL ATALAMA KONTROLÜ (Eğer hiç tuğla kalmadıysa bir sonraki levele geç!)
+      if (activeBricks === 0 && bricksRef.current.length > 0) {
+        nextLevel();
+        return;
+      }
+
+      // 3. Düşen Bonusları Hareket Ettir ve Yakala
+      powerUpsRef.current.forEach((p, idx) => {
+        p.y += 2; // Aşağı doğru süzülüş hızı
+
+        // Pedal bonusu yakaladı mı?
+        if (p.y >= FIXED_HEIGHT - PADDLE_HEIGHT - 10 && p.x >= paddleXRef.current && p.x <= paddleXRef.current + paddleWidthRef.current) {
+          playAudio("powerup");
+          if (p.type === "expand") {
+            paddleWidthRef.current = PADDLE_WIDTH * 1.4; // Pedalı büyüt
+          } else if (p.type === "slow") {
+            ballVxFRef.current *= 0.75; ballVyFRef.current *= 0.75; // Topu yavaşlat
+          } else if (p.type === "fire") {
+            ballVxFRef.current *= 1.3; ballVyFRef.current *= 1.3; // Topu hızlandır
+          }
+          powerUpsRef.current.splice(idx, 1); // Yakalanan bonusu sil
+        }
+
+        // Ekrandan çıkıp giden bonusları temizle
+        if (p.y > FIXED_HEIGHT) powerUpsRef.current.splice(idx, 1);
       });
     };
 
@@ -157,12 +230,21 @@ export default function BrickBreakerMiniApp() {
       ctx.clearRect(0, 0, FIXED_WIDTH, FIXED_HEIGHT);
       ctx.fillStyle = "#0f172a"; ctx.fillRect(0, 0, FIXED_WIDTH, FIXED_HEIGHT);
 
+      // Tuğlaları Çiz
       bricksRef.current.forEach((b) => {
         if (b.status <= 0) return;
         ctx.fillStyle = b.shadowColor; ctx.fillRect(b.x, b.y + 2, b.width, b.height);
         ctx.fillStyle = b.color; ctx.fillRect(b.x, b.y, b.width, b.height);
       });
 
+      // 🎁 Bonus Kutularını Ekrana Çiz
+      powerUpsRef.current.forEach((p) => {
+        if (p.type === "expand") { ctx.fillStyle = "#38bdf8"; ctx.font = "bold 12px sans-serif"; ctx.fillText("📏", p.x, p.y); }
+        else if (p.type === "slow") { ctx.fillStyle = "#4ade80"; ctx.font = "bold 12px sans-serif"; ctx.fillText("❄️", p.x, p.y); }
+        else if (p.type === "fire") { ctx.fillStyle = "#f87171"; ctx.font = "bold 12px sans-serif"; ctx.fillText("🔥", p.x, p.y); }
+      });
+
+      // Pedalı ve Topu Çiz (Dinamik genişlik kullanarak)
       ctx.fillStyle = "#3b82f6"; ctx.fillRect(paddleXRef.current, FIXED_HEIGHT - PADDLE_HEIGHT - 4, paddleWidthRef.current, PADDLE_HEIGHT);
       ctx.fillStyle = "#ef4444"; ctx.beginPath(); ctx.arc(ballXRef.current, ballYRef.current, BALL_RADIUS, 0, Math.PI * 2); ctx.fill();
     };
@@ -172,7 +254,6 @@ export default function BrickBreakerMiniApp() {
     return () => cancelAnimationFrame(animId);
   }, [gameState, playAudio]);
 
-  // 🖱️ BİLGİSAYAR FARESİ KONTROLÜ
   const handlePointerMove = (e) => {
     if (gameState !== "playing" || !canvasRef.current) return;
     const rect = canvasRef.current.getBoundingClientRect();
@@ -180,12 +261,9 @@ export default function BrickBreakerMiniApp() {
     paddleXRef.current = Math.max(0, Math.min(FIXED_WIDTH - paddleWidthRef.current, canvasX - paddleWidthRef.current / 2));
   };
 
-  // 📱 MOBİL DOKUNMATİK EKRAN KONTROLÜ (YENİ EKLENDİ)
   const handleTouchMove = (e) => {
     if (gameState !== "playing" || !canvasRef.current || e.touches.length === 0) return;
-    // Telefonun ekranı aşağı kaydırmasını engelliyoruz
     if (e.cancelable) e.preventDefault();
-    
     const rect = canvasRef.current.getBoundingClientRect();
     const touch = e.touches[0];
     const canvasX = (touch.clientX - rect.left) * (FIXED_WIDTH / rect.width);
@@ -228,7 +306,7 @@ export default function BrickBreakerMiniApp() {
         <div>LEVEL: <span className="text-purple-400 font-bold">{level}</span></div>
       </div>
 
-      {/* OYUN CANVAS EKRANI (DOKUNMATİK DESTEKLİ) */}
+      {/* OYUN KANVASI */}
       <div className="relative flex justify-center bg-slate-950 rounded-xl overflow-hidden border border-slate-800 aspect-[400/400] w-full">
         <canvas
           ref={canvasRef}
@@ -236,7 +314,7 @@ export default function BrickBreakerMiniApp() {
           height={FIXED_HEIGHT}
           onPointerMove={handlePointerMove}
           onTouchMove={handleTouchMove}
-          onTouchStart={handleTouchMove} // Parmağı ilk bastığı anda da algılasın diye
+          onTouchStart={handleTouchMove}
           className="w-full h-full block touch-none cursor-crosshair"
         />
 
