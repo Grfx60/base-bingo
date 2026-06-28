@@ -43,17 +43,21 @@ export default function BrickBreakerMiniApp() {
   const gameStateRef = useRef("menu");
   const paddleXRef = useRef((FIXED_WIDTH - PADDLE_WIDTH) / 2);
   const paddleWidthRef = useRef(PADDLE_WIDTH);
+  
+  // Top mekanikleri ve hızları
   const ballXRef = useRef(FIXED_WIDTH / 2);
   const ballYRef = useRef(FIXED_HEIGHT - 30);
-  
-  // 🕹️ 1. DÜZELTME: Topun başlangıç hızını yavaşlattık (1.8 hız çarpanı)
   const ballVxFRef = useRef(1.8);
   const ballVyFRef = useRef(-1.8);
   const bricksRef = useRef([]);
   
-  // 🎁 3. DÜZELTME: Bonus (Power-up) sistemi için state'ler ve referanslar
+  // Bonus (Power-up) Sistemleri
   const [activePowerUp, setActivePowerUp] = useState<string | null>(null);
-  const powerUpsRef = useRef([]); // Ekranda düşen bonusları tutar
+  const powerUpsRef = useRef([]); 
+  
+  // Efektlerin sürelerini arkada takip etmek için referanslar (5 saniye = 5000ms)
+  const isFrozenRef = useRef(false);
+  const isFireRef = useRef(false);
 
   useEffect(() => { scoreRef.current = score; }, [score]);
   useEffect(() => { levelRef.current = level; }, [level]);
@@ -81,7 +85,7 @@ export default function BrickBreakerMiniApp() {
   const playAudio = useCallback((type) => {
     if (isMuted) return;
     try {
-      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      const AudioCtx = window.AudioContext || window.webkitAutoContext;
       if (!AudioCtx) return;
       const ctx = new AudioCtx();
       const osc = ctx.createOscillator();
@@ -94,18 +98,24 @@ export default function BrickBreakerMiniApp() {
     } catch(e){}
   }, [isMuted]);
 
-  // 🎨 2. DÜZELTME: Soft/Pastel renk paleti ve 3D gölge tonları
+  // Tuğla Oluşturucu ve Rastgele Yeni Kapsüller (FREEZE ve FIRE eklendi)
   const generateBricks = () => {
     const rows = 4; const cols = 6; const padding = 8; const offsetTop = 35; const offsetLeft = 14;
     const bWidth = (FIXED_WIDTH - offsetLeft * 2 - padding * (cols - 1)) / cols; const bHeight = 18;
     const arr = [];
-    
-    // Modern Soft/Pastel Renkler
     const colors = ["#A0C4FF", "#BDB2FF", "#FFADAD", "#FFD6A5"]; 
     const shadows = ["#7EA5E0", "#9B8FE0", "#E08E8E", "#E0B788"]; 
 
+    const types = ["WIDE", "LIFE", "FREEZE", "FIRE"];
+
     for (let r = 0; r < rows; r++) {
       for (let c = 0; c < cols; c++) {
+        const rand = Math.random();
+        let chosenPowerUp = null;
+        if (rand < 0.28) { // %28 ihtimalle herhangi bir bonus gizle
+          chosenPowerUp = types[Math.floor(Math.random() * types.length)];
+        }
+
         arr.push({
           x: c * (bWidth + padding) + offsetLeft,
           y: r * (bHeight + padding) + offsetTop,
@@ -114,8 +124,7 @@ export default function BrickBreakerMiniApp() {
           status: 1,
           color: colors[r % colors.length],
           shadowColor: shadows[r % shadows.length],
-          // Rastgele bazı tuğlalara bonus gizleyelim
-          hasPowerUp: Math.random() < 0.25 ? (Math.random() < 0.5 ? "WIDE" : "LIFE") : null
+          hasPowerUp: chosenPowerUp
         });
       }
     }
@@ -128,22 +137,30 @@ export default function BrickBreakerMiniApp() {
     paddleWidthRef.current = PADDLE_WIDTH;
     setActivePowerUp(null);
     powerUpsRef.current = [];
+    isFrozenRef.current = false;
+    isFireRef.current = false;
     paddleXRef.current = (FIXED_WIDTH - paddleWidthRef.current) / 2;
     generateBricks(); 
     resetBall(1);
     setGameState("playing");
   };
 
-  // Seviye atladıkça topun hızını kademeli artıran mekanizma
+  // 1. DÜZELTME: Seviye atladıkça hız çarpanı artışını yavaşlattık (0.4 yerine 0.15 artıyor)
   const resetBall = (currentLevel = levelRef.current) => {
     ballXRef.current = FIXED_WIDTH / 2; 
     ballYRef.current = FIXED_HEIGHT - 35;
-    const speedMultiplier = 1.8 + (currentLevel - 1) * 0.4; // Her seviyede hızı 0.4 birim artar
+    
+    let speedMultiplier = 1.8 + (currentLevel - 1) * 0.15; 
+    
+    // Eğer dondurucu aktifken top resetlenirse yavaş hızda başlasın
+    if (isFrozenRef.current) {
+      speedMultiplier = speedMultiplier * 0.5;
+    }
+
     ballVxFRef.current = Math.random() > 0.5 ? speedMultiplier : -speedMultiplier;
     ballVyFRef.current = -speedMultiplier;
   };
 
-  // Bölüm temizlendi mi kontrolü
   const checkVictory = () => {
     const anyLeft = bricksRef.current.some(b => b.status === 1);
     if (!anyLeft) {
@@ -186,10 +203,13 @@ export default function BrickBreakerMiniApp() {
         if (ballXRef.current >= b.x && ballXRef.current <= b.x + b.width && ballYRef.current >= b.y && ballYRef.current <= b.y + b.height) {
           b.status = 0; 
           setScore((s) => s + 10); 
-          ballVyFRef.current = -ballVyFRef.current; 
           playAudio("brick");
 
-          // Tuğla kırılınca bonus düşürme ihtimali
+          // 3. DÜZELTME: Eğer ATEŞ TOPU aktif DEĞİLSE top normal seker. Aktifse delip geçer (yönü değişmez).
+          if (!isFireRef.current) {
+            ballVyFRef.current = -ballVyFRef.current; 
+          }
+
           if (b.hasPowerUp) {
             powerUpsRef.current.push({
               x: b.x + b.width / 2,
@@ -201,23 +221,48 @@ export default function BrickBreakerMiniApp() {
         }
       });
 
-      // 🎁 3. DÜZELTME: Bonus kapsüllerinin hareketi (Düşme hızını 1.2'ye sabitleyerek yavaşlattık)
+      // Bonus kapsüllerinin hareketi ve yakalanma kontrolleri
       powerUpsRef.current.forEach((p, idx) => {
-        p.y += 1.2; // Yumuşak ve yavaş düşüş hızı
+        p.y += 1.2; 
 
-        // Pedalla yakalama kontrolü
         if (p.y >= FIXED_HEIGHT - PADDLE_HEIGHT - 10 && p.y <= FIXED_HEIGHT && p.x >= paddleXRef.current && p.x <= paddleXRef.current + paddleWidthRef.current) {
           playAudio("powerup");
+          
           if (p.type === "WIDE") {
-            paddleWidthRef.current = PADDLE_WIDTH * 1.4; // Pedalı genişlet
+            paddleWidthRef.current = PADDLE_WIDTH * 1.4;
             setActivePowerUp("Geniş Pedal");
-            setTimeout(() => { paddleWidthRef.current = PADDLE_WIDTH; setActivePowerUp(null); }, 8000); // 8 saniye sonra normale dön
-          } else if (p.type === "LIFE") {
+            setTimeout(() => { paddleWidthRef.current = PADDLE_WIDTH; setActivePowerUp(null); }, 5000);
+          } 
+          else if (p.type === "LIFE") {
             setLives(l => l + 1);
+          } 
+          // 2. DÜZELTME: Dondurucu Yakalandığında (5 Saniye Sürer)
+          else if (p.type === "FREEZE") {
+            if (!isFrozenRef.current) {
+              isFrozenRef.current = true;
+              ballVxFRef.current *= 0.5;
+              ballVyFRef.current *= 0.5;
+              setActivePowerUp("❄️ Dondurucu Top");
+              setTimeout(() => {
+                isFrozenRef.current = false;
+                ballVxFRef.current *= 2;
+                ballVyFRef.current *= 2;
+                setActivePowerUp(null);
+              }, 5000);
+            }
+          } 
+          // 3. DÜZELTME: Ateş Topu Yakalandığında (5 Saniye Sürer)
+          else if (p.type === "FIRE") {
+            isFireRef.current = true;
+            setActivePowerUp("🔥 Ateş Topu");
+            setTimeout(() => {
+              isFireRef.current = false;
+              setActivePowerUp(null);
+            }, 5000);
           }
+
           powerUpsRef.current.splice(idx, 1);
         }
-        // Ekrandan çıkanları sil
         else if (p.y > FIXED_HEIGHT) {
           powerUpsRef.current.splice(idx, 1);
         }
@@ -230,54 +275,55 @@ export default function BrickBreakerMiniApp() {
       ctx.clearRect(0, 0, FIXED_WIDTH, FIXED_HEIGHT);
       ctx.fillStyle = "#0f172a"; ctx.fillRect(0, 0, FIXED_WIDTH, FIXED_HEIGHT);
 
-      // 🎨 2. DÜZELTME: Gelişmiş Yuvarlak Köşeli ve 3D Parlamalı Tuğla Çizimi
+      // Yuvarlak Köşeli ve 3D Parlamalı Tuğla Çizimi
       bricksRef.current.forEach((b) => {
         if (b.status <= 0) return;
-        
         ctx.save();
-        const radius = 5; // Köşe yuvarlaklığı derecesi
-
-        // Alt 3D Gölge Katmanı
+        const radius = 5;
         ctx.fillStyle = b.shadowColor;
-        ctx.beginPath();
-        ctx.roundRect(b.x, b.y + 3, b.width, b.height, radius);
-        ctx.fill();
-
-        // Ana Soft Renkli Gövde Katmanı
+        ctx.beginPath(); ctx.roundRect(b.x, b.y + 3, b.width, b.height, radius); ctx.fill();
         ctx.fillStyle = b.color;
-        ctx.beginPath();
-        ctx.roundRect(b.x, b.y, b.width, b.height, radius);
-        ctx.fill();
-
-        // Üst 3D Parlama (İç Işık) Efekti
+        ctx.beginPath(); ctx.roundRect(b.x, b.y, b.width, b.height, radius); ctx.fill();
         ctx.fillStyle = "rgba(255, 255, 255, 0.25)";
-        ctx.beginPath();
-        ctx.roundRect(b.x + 2, b.y + 2, b.width - 4, 4, 2);
-        ctx.fill();
-
+        ctx.beginPath(); ctx.roundRect(b.x + 2, b.y + 2, b.width - 4, 4, 2); ctx.fill();
         ctx.restore();
       });
 
       // Bonus Kapsüllerini Çizme
       powerUpsRef.current.forEach((p) => {
-        ctx.fillStyle = p.type === "WIDE" ? "#38bdf8" : "#f43f5e";
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, 8, 0, Math.PI * 2);
-        ctx.fill();
-        // İçine küçük bir simge ekleyelim
+        let pColor = "#38bdf8";
+        let pIcon = "↔️";
+        if (p.type === "LIFE") { pColor = "#f43f5e"; pIcon = "❤️"; }
+        else if (p.type === "FREEZE") { pColor = "#60a5fa"; pIcon = "❄️"; }
+        else if (p.type === "FIRE") { pColor = "#f97316"; pIcon = "🔥"; }
+
+        ctx.fillStyle = pColor;
+        ctx.beginPath(); ctx.arc(p.x, p.y, 9, 0, Math.PI * 2); ctx.fill();
         ctx.fillStyle = "#ffffff";
         ctx.font = "bold 9px sans-serif";
-        ctx.fillText(p.type === "WIDE" ? "↔️" : "❤️", p.x - 5, p.y + 3);
+        ctx.fillText(pIcon, p.x - 5, p.y + 3);
       });
 
-      // Pedalı Çizme (Genişlik dinamik değişebilir)
+      // Pedalı Çizme
       ctx.fillStyle = "#3b82f6";
-      ctx.beginPath();
-      ctx.roundRect(paddleXRef.current, FIXED_HEIGHT - PADDLE_HEIGHT - 4, paddleWidthRef.current, PADDLE_HEIGHT, 4);
-      ctx.fill();
+      ctx.beginPath(); ctx.roundRect(paddleXRef.current, FIXED_HEIGHT - PADDLE_HEIGHT - 4, paddleWidthRef.current, PADDLE_HEIGHT, 4); ctx.fill();
 
-      // Topu Çizme
-      ctx.fillStyle = "#f43f5e"; ctx.beginPath(); ctx.arc(ballXRef.current, ballYRef.current, BALL_RADIUS, 0, Math.PI * 2); ctx.fill();
+      // Topu Çizme (Ateş ve Buz durumlarına göre renk değiştiriyor)
+      if (isFireRef.current) {
+        ctx.fillStyle = "#f97316"; // Ateş rengi turuncu
+      } else if (isFrozenRef.current) {
+        ctx.fillStyle = "#60a5fa"; // Buz rengi açık mavi
+      } else {
+        ctx.fillStyle = "#f43f5e"; // Standart kırmızı
+      }
+      ctx.beginPath(); ctx.arc(ballXRef.current, ballYRef.current, BALL_RADIUS, 0, Math.PI * 2); ctx.fill();
+      
+      // Ateş veya buz durumunda topun etrafına küçük bir aura/parlama efekti verelim
+      if (isFireRef.current || isFrozenRef.current) {
+        ctx.strokeStyle = isFireRef.current ? "rgba(249, 115, 22, 0.4)" : "rgba(96, 165, 250, 0.4)";
+        ctx.lineWidth = 4;
+        ctx.beginPath(); ctx.arc(ballXRef.current, ballYRef.current, BALL_RADIUS + 2, 0, Math.PI * 2); ctx.stroke();
+      }
     };
 
     const loop = () => { update(); render(); animId = requestAnimationFrame(loop); };
@@ -353,7 +399,7 @@ export default function BrickBreakerMiniApp() {
         {/* Aktif Güç Göstergesi */}
         {activePowerUp && (
           <div className="absolute top-2 left-2 bg-blue-600/80 backdrop-blur-sm px-2 py-0.5 rounded text-[9px] font-bold tracking-wide animate-pulse">
-            🔥 {activePowerUp} AKTİF!
+            {activePowerUp} AKTİF!
           </div>
         )}
 
