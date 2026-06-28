@@ -36,6 +36,7 @@ export default function BrickBreakerMiniApp() {
   const [playerLv, setPlayerLv] = useState(1);
   const [playerXp, setPlayerXp] = useState(0);
   const [attemptsLeft, setAttemptsLeft] = useState(3);
+  const [isSdkLoaded, setIsSdkLoaded] = useState(false);
 
   const scoreRef = useRef(0);
   const levelRef = useRef(1);
@@ -54,28 +55,28 @@ export default function BrickBreakerMiniApp() {
   useEffect(() => { livesRef.current = lives; }, [lives]);
   useEffect(() => { gameStateRef.current = gameState; }, [gameState]);
 
-  // 🛠️ YENİ MINIAPP-SDK RESMİ DOKÜMANTASYON TETİKLEYİCİSİ
+  // 🛠️ DOKÜMANTASYONA %100 UYUMLU RESMİ BAŞLATICI (INIT + READY)
   useEffect(() => {
-    const triggerFarcasterReady = async () => {
+    const initFarcasterMiniApp = async () => {
       try {
-        // Yeni miniapp-sdk paketini dinamik yüklüyoruz
         const { sdk } = await import("@farcaster/miniapp-sdk");
-        if (sdk && sdk.actions) {
-          // Açılış ekranını otomatik kapatan büyülü kod
+        if (sdk) {
+          // 1. Önce SDK'yı sisteme tanıtıyoruz (init)
+          await sdk.actions.init();
+          setIsSdkLoaded(true);
+          
+          // 2. Sistem hazır olduğunda ekranı açıyoruz (ready)
           await sdk.actions.ready();
-          console.log("Yeni Farcaster Mini App Ready tetiklendi!");
+          console.log("Farcaster v2 Başarıyla İlklendirildi ve Tetiklendi!");
         }
       } catch (e) {
-        console.log("Farcaster SDK normal tarayıcıda pasif:", e);
+        console.error("Farcaster yükleme hatası:", e);
+        // Normal tarayıcıda da oyunun çalışabilmesi için yükleme durumunu true yapıyoruz
+        setIsSdkLoaded(true);
       }
     };
 
-    if (document.readyState === "complete") {
-      triggerFarcasterReady();
-    } else {
-      window.addEventListener("load", triggerFarcasterReady);
-      return () => window.removeEventListener("load", triggerFarcasterReady);
-    }
+    initFarcasterMiniApp();
   }, []);
 
   // Ses Efektleri
@@ -184,6 +185,15 @@ export default function BrickBreakerMiniApp() {
     const canvasX = (e.clientX - rect.left) * (FIXED_WIDTH / rect.width);
     paddleXRef.current = Math.max(0, Math.min(FIXED_WIDTH - paddleWidthRef.current, canvasX - paddleWidthRef.current / 2));
   };
+
+  // SDK yüklenene kadar küçük bir yükleniyor ekranı gösteriyoruz (Sonsuz döngüyü kırar)
+  if (!isSdkLoaded) {
+    return (
+      <div className="w-full max-w-md mx-auto p-8 bg-slate-900 border border-slate-800 rounded-2xl text-center text-slate-400 font-mono text-xs">
+        Loading Farcaster SDK...
+      </div>
+    );
+  }
 
   return (
     <div className="w-full max-w-md mx-auto p-4 bg-slate-900 border border-slate-800 rounded-2xl text-white shadow-2xl flex flex-col gap-3 select-none overflow-hidden">
