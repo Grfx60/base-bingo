@@ -13,7 +13,7 @@ const safeSupabaseAnonKey = supabaseAnonKey || "dummy-key";
 const supabase = createClient(safeSupabaseUrl, safeSupabaseAnonKey);
 
 const FIXED_WIDTH = 400;
-const FIXED_HEIGHT = 450; 
+const FIXED_HEIGHT = 400; // Ekranın taşmaması için yüksekliği 400'e optimize ettik
 const PADDLE_WIDTH = 80;
 const PADDLE_HEIGHT = 12;
 const BALL_RADIUS = 8;
@@ -26,7 +26,7 @@ export default function BrickBreakerMiniApp() {
   const userWallet = address || "Guest";
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
-  // --- OYUN AYARLARI VE STATE'LERİ ---
+  // --- OYUN AYARLARI ---
   const [score, setScore] = useState(0);
   const [level, setLevel] = useState(1);
   const [lives, setLives] = useState(4);
@@ -37,7 +37,6 @@ export default function BrickBreakerMiniApp() {
   const [playerXp, setPlayerXp] = useState(0);
   const [attemptsLeft, setAttemptsLeft] = useState(3);
 
-  // REFS (Hassas zamanlamalar için arka plan hafızası)
   const scoreRef = useRef(0);
   const levelRef = useRef(1);
   const livesRef = useRef(4);
@@ -55,19 +54,15 @@ export default function BrickBreakerMiniApp() {
   useEffect(() => { livesRef.current = lives; }, [lives]);
   useEffect(() => { gameStateRef.current = gameState; }, [gameState]);
 
-  // 🛠️ FARCASTER TAKILMA SORUNUNU ÇÖZEN EN ENERJİK TETİKLEYİCİ
+  // Farcaster Tetikleyici
   useEffect(() => {
     const triggerFarcasterReady = async () => {
       try {
         const sdk = (await import("@farcaster/frame-sdk")).default;
         if (sdk && sdk.actions) {
-          // Sistem yüklenir yüklenmez Farcaster'a "Hazırız, ekran kilidini aç" diyoruz
           await sdk.actions.ready();
-          console.log("Farcaster Başarıyla Tetiklendi!");
         }
-      } catch (e) {
-        console.log("Farcaster SDK normal tarayıcıda pasif (Bu bir hata değildir):", e);
-      }
+      } catch (e) {}
     };
 
     if (document.readyState === "complete") {
@@ -78,7 +73,7 @@ export default function BrickBreakerMiniApp() {
     }
   }, []);
 
-  // Ses Efektleri Üretici (Sistem Hoparlöründen Yapay Ses Üretir, Dosya Gerektirmez)
+  // Ses Efektleri
   const playAudio = useCallback((type) => {
     if (isMuted) return;
     try {
@@ -94,13 +89,13 @@ export default function BrickBreakerMiniApp() {
     } catch(e){}
   }, [isMuted]);
 
-  // Tuğlaları Haritaya Dizer
   const generateBricks = () => {
-    const rows = 5; const cols = 6; const padding = 6; const offsetTop = 40; const offsetLeft = 12;
+    const rows = 4; // Farcaster ekran yüksekliği için dikey tuğla sırasını 4'e indirdik
+    const cols = 6; const padding = 6; const offsetTop = 30; const offsetLeft = 12;
     const bWidth = (FIXED_WIDTH - offsetLeft * 2 - padding * (cols - 1)) / cols; const bHeight = 16;
     const arr = [];
-    const colors = ["#4A90E2", "#B37FEB", "#FF4D4F", "#FF9C6E", "#73D13D"];
-    const shadows = ["#2C66A3", "#722ED1", "#A61D24", "#D4380D", "#389E0D"];
+    const colors = ["#4A90E2", "#B37FEB", "#FF4D4F", "#FF9C6E"];
+    const shadows = ["#2C66A3", "#722ED1", "#A61D24", "#D4380D"];
 
     for (let r = 0; r < rows; r++) {
       for (let c = 0; c < cols; c++) {
@@ -131,29 +126,25 @@ export default function BrickBreakerMiniApp() {
     ballVxFRef.current = 3; ballVyFRef.current = -3;
   };
 
-  // Oyunun Ana Motoru (Fizik Kuralları ve Çizim Döngüsü)
+  // Oyun Motoru Döngüsü
   useEffect(() => {
     let animId;
     const update = () => {
       if (gameStateRef.current !== "playing") return;
       ballXRef.current += ballVxFRef.current; ballYRef.current += ballVyFRef.current;
 
-      // Duvarlara Çarpma
       if (ballXRef.current + BALL_RADIUS > FIXED_WIDTH || ballXRef.current - BALL_RADIUS < 0) { ballVxFRef.current = -ballVxFRef.current; playAudio("hit"); }
       if (ballYRef.current - BALL_RADIUS < 0) { ballVyFRef.current = -ballVyFRef.current; playAudio("hit"); }
 
-      // Çubuğa Çarpma (Pedal kontrolü)
       if (ballVyFRef.current > 0 && ballYRef.current + BALL_RADIUS >= FIXED_HEIGHT - PADDLE_HEIGHT - 4 && ballXRef.current >= paddleXRef.current && ballXRef.current <= paddleXRef.current + paddleWidthRef.current) {
         ballVyFRef.current = -ballVyFRef.current; playAudio("hit");
       }
 
-      // Aşağı Düşüp Can Kaybetme
       if (ballYRef.current > FIXED_HEIGHT) {
         playAudio("lose"); const nextLives = livesRef.current - 1; setLives(nextLives);
         if (nextLives <= 0) setGameState("gameover"); else resetBall();
       }
 
-      // Tuğla Patlatma Kontrolü
       bricksRef.current.forEach((b) => {
         if (b.status <= 0) return;
         if (ballXRef.current >= b.x && ballXRef.current <= b.x + b.width && ballYRef.current >= b.y && ballYRef.current <= b.y + b.height) {
@@ -166,16 +157,14 @@ export default function BrickBreakerMiniApp() {
       const canvas = canvasRef.current; if (!canvas) return;
       const ctx = canvas.getContext("2d"); if (!ctx) return;
       ctx.clearRect(0, 0, FIXED_WIDTH, FIXED_HEIGHT);
-      ctx.fillStyle = "#111827"; ctx.fillRect(0, 0, FIXED_WIDTH, FIXED_HEIGHT);
+      ctx.fillStyle = "#0f172a"; ctx.fillRect(0, 0, FIXED_WIDTH, FIXED_HEIGHT);
 
-      // Tuğlaları Çiz
       bricksRef.current.forEach((b) => {
         if (b.status <= 0) return;
         ctx.fillStyle = b.shadowColor; ctx.fillRect(b.x, b.y + 2, b.width, b.height);
         ctx.fillStyle = b.color; ctx.fillRect(b.x, b.y, b.width, b.height);
       });
 
-      // Pedalı ve Topu Çiz
       ctx.fillStyle = "#3b82f6"; ctx.fillRect(paddleXRef.current, FIXED_HEIGHT - PADDLE_HEIGHT - 4, paddleWidthRef.current, PADDLE_HEIGHT);
       ctx.fillStyle = "#ef4444"; ctx.beginPath(); ctx.arc(ballXRef.current, ballYRef.current, BALL_RADIUS, 0, Math.PI * 2); ctx.fill();
     };
@@ -185,7 +174,6 @@ export default function BrickBreakerMiniApp() {
     return () => cancelAnimationFrame(animId);
   }, [gameState, playAudio]);
 
-  // Parmak veya Fare Hareketine Göre Çubuğu Kaydırır
   const handlePointerMove = (e) => {
     if (gameState !== "playing" || !canvasRef.current) return;
     const rect = canvasRef.current.getBoundingClientRect();
@@ -194,35 +182,35 @@ export default function BrickBreakerMiniApp() {
   };
 
   return (
-    <div className="w-full max-w-md mx-auto p-4 bg-slate-900 border border-slate-800 rounded-3xl text-white shadow-2xl flex flex-col gap-4 select-none">
+    <div className="w-full max-w-md mx-auto p-4 bg-slate-900 border border-slate-800 rounded-2xl text-white shadow-2xl flex flex-col gap-3 select-none overflow-hidden">
       
-      {/* ÜST PANEL: BAŞLIK VE CÜZDAN BAĞLANTISI */}
-      <div className="flex justify-between items-center border-b border-slate-800 pb-3">
+      {/* ÜST PANEL: BAŞLIK VE CÜZDAN */}
+      <div className="flex justify-between items-center border-b border-slate-800 pb-2">
         <div>
-          <h1 className="text-lg font-black tracking-wider bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-purple-400">
+          <h1 className="text-base font-black tracking-wider bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-purple-400">
             BASE BINGO
           </h1>
-          <p className="text-[10px] text-slate-500 font-semibold">Brick Breaker Edition</p>
+          <p className="text-[10px] text-slate-500 font-bold">Brick Breaker Edition</p>
         </div>
         <button
           onClick={() => isConnected ? disconnect() : (connectors[0] && connect({ connector: connectors[0] }))}
-          className={`px-3 py-1.5 rounded-xl font-bold text-xs transition-all ${
-            isConnected ? "bg-slate-800 text-emerald-400 border border-emerald-500/30" : "bg-blue-600 text-white hover:bg-blue-500"
+          className={`px-2.5 py-1 rounded-lg font-bold text-[11px] transition-all ${
+            isConnected ? "bg-slate-800 text-emerald-400 border border-emerald-500/20" : "bg-blue-600 text-white"
           }`}
         >
           {isConnected ? `${address.slice(0, 4)}...${address.slice(-4)}` : "Connect Wallet"}
         </button>
       </div>
 
-      {/* CAN / SKOR GÖSTERGELERİ */}
-      <div className="grid grid-cols-3 text-center text-xs bg-slate-950 p-2.5 rounded-xl border border-slate-800 font-mono">
+      {/* DURUM GÖSTERGELERİ */}
+      <div className="grid grid-cols-3 text-center text-[11px] bg-slate-950 py-1.5 px-2 rounded-xl border border-slate-800 font-mono gap-1">
         <div>SCORE: <span className="text-emerald-400 font-bold">{score}</span></div>
         <div>LIVES: <span className="text-red-400 font-bold">{"❤️".repeat(Math.max(0, lives))}</span></div>
         <div>LEVEL: <span className="text-purple-400 font-bold">{level}</span></div>
       </div>
 
-      {/* OYUNUN CANLI EKRANI (CANVAS) */}
-      <div className="relative flex justify-center bg-slate-950 rounded-2xl overflow-hidden border border-slate-800 aspect-[400/450]">
+      {/* OYUN EKRANI */}
+      <div className="relative flex justify-center bg-slate-950 rounded-xl overflow-hidden border border-slate-800 aspect-[400/400] w-full">
         <canvas
           ref={canvasRef}
           width={FIXED_WIDTH}
@@ -231,22 +219,21 @@ export default function BrickBreakerMiniApp() {
           className="w-full h-full block touch-none cursor-crosshair"
         />
 
-        {/* MENÜ KATMANLARI (BAŞLANGIÇ VE OYUN BİTTİ EKRANLARI) */}
         {gameState !== "playing" && (
-          <div className="absolute inset-0 bg-slate-950/90 backdrop-blur-sm flex flex-col items-center justify-center p-6 text-center">
+          <div className="absolute inset-0 bg-slate-950/90 backdrop-blur-sm flex flex-col items-center justify-center p-4 text-center">
             {gameState === "menu" && (
-              <div className="space-y-4">
-                <h3 className="text-sm font-bold text-blue-400">Smash the Bricks!</h3>
-                <button onClick={startGame} className="px-8 py-3 bg-blue-600 hover:bg-blue-500 font-black rounded-xl tracking-widest text-xs shadow-lg transition-transform active:scale-95">
+              <div className="space-y-3">
+                <h3 className="text-xs font-bold text-blue-400 uppercase tracking-wider">Smash the Bricks!</h3>
+                <button onClick={startGame} className="px-6 py-2 bg-blue-600 hover:bg-blue-500 font-black rounded-lg tracking-wider text-[11px] shadow-md">
                   START GAME
                 </button>
               </div>
             )}
             {gameState === "gameover" && (
-              <div className="space-y-3">
-                <h3 className="text-lg font-black text-red-500 tracking-wider">GAME OVER</h3>
-                <p className="text-xs text-slate-400">Final Score: <span className="text-white font-bold">{score}</span></p>
-                <button onClick={startGame} className="px-6 py-2.5 bg-red-600 hover:bg-red-500 font-bold rounded-xl text-xs shadow-md transition-transform active:scale-95">
+              <div className="space-y-2">
+                <h3 className="text-sm font-black text-red-500 tracking-widest">GAME OVER</h3>
+                <p className="text-[11px] text-slate-400">Final Score: <span className="text-white font-bold">{score}</span></p>
+                <button onClick={startGame} className="px-5 py-2 bg-red-600 font-bold rounded-lg text-[11px]">
                   TRY AGAIN
                 </button>
               </div>
@@ -255,24 +242,24 @@ export default function BrickBreakerMiniApp() {
         )}
       </div>
 
-      {/* ALT PANEL: TURNUVA BİLGİLERİ */}
-      <div className="grid grid-cols-2 gap-2 text-[11px]">
-        <div className="bg-slate-950 p-2 rounded-xl border border-slate-800 flex flex-col">
-          <span className="text-slate-500 font-bold text-[9px] uppercase tracking-tight">Player Status</span>
+      {/* ALT PANEL: OYUNCU İSTATİSTİKLERİ VE BUTONLAR */}
+      <div className="grid grid-cols-2 gap-2 text-[10px] bg-slate-950 p-2 rounded-xl border border-slate-800">
+        <div className="flex flex-col justify-center">
+          <span className="text-slate-500 font-bold text-[9px] uppercase">Player Status</span>
           <span className="font-bold text-blue-400 mt-0.5">LV {playerLv} ({playerXp} XP)</span>
         </div>
-        <div className="bg-slate-950 p-2 rounded-xl border border-slate-800 flex flex-col justify-between">
-          <span className="text-slate-500 font-bold text-[9px] uppercase tracking-tight">Attempts Left</span>
-          <span className="font-bold text-amber-400 font-mono">{attemptsLeft} / 3</span>
+        <div className="flex flex-col justify-center items-end">
+          <span className="text-slate-500 font-bold text-[9px] uppercase">Attempts Left</span>
+          <span className="font-bold text-amber-400 font-mono mt-0.5">{attemptsLeft} / 3</span>
         </div>
       </div>
 
-      {/* MOD SEÇİMİ VE FARCASTER PAYLAŞ BUTONU */}
-      <div className="grid grid-cols-2 gap-2 text-xs">
-        <button onClick={() => setGameMode(m => m === "tournament" ? "practice" : "tournament")} className="py-2.5 bg-slate-800 border border-slate-700 font-medium rounded-xl text-slate-300 hover:bg-slate-750 transition-colors">
+      {/* BUTON GRUBU */}
+      <div className="grid grid-cols-2 gap-2 text-[11px]">
+        <button onClick={() => setGameMode(m => m === "tournament" ? "practice" : "tournament")} className="py-2 bg-slate-800 border border-slate-700 font-bold rounded-lg text-slate-300 text-center">
           {gameMode === "tournament" ? "🏆 Tournament" : "🕹️ Practice"}
         </button>
-        <button onClick={() => window.open(`https://farcaster.com/~/compose?text=${encodeURIComponent(`Base-Bingo Tuğla Kırma Oyununda ${score} puan topladım! Sen de katıl 🚀`)}`, "_blank")} className="py-2.5 bg-indigo-600 hover:bg-indigo-500 font-bold rounded-xl shadow-md transition-colors text-center">
+        <button onClick={() => window.open(`https://farcaster.com/~/compose?text=${encodeURIComponent(`Base-Bingo Tuğla Kırma Oyununda ${score} puan topladım! Sen de katıl 🚀`)}`, "_blank")} className="py-2 bg-indigo-600 font-bold rounded-lg text-center text-white shadow-sm">
           Share 📤
         </button>
       </div>
