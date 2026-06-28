@@ -5,7 +5,6 @@ import { minikitConfig } from "@/minikit.config";
 import { RootProvider } from "./rootProvider";
 import "./globals.css";
 
-// 1. DİNAMİK METADATA OLUŞTURUCU (Hem Base Hem Farcaster İçin)
 export async function generateMetadata(): Promise<Metadata> {
   return {
     title: minikitConfig.miniapp.name,
@@ -15,10 +14,10 @@ export async function generateMetadata(): Promise<Metadata> {
       description: minikitConfig.miniapp.description,
     },
     other: {
-      // Base App ID doğrulaması (Metadata Seviyesi)
+      // Base App ID doğrulaması
       "base:app_id": "6a3eab37fb80a74d69497aa5",
 
-      // Farcaster Frames v2 / Mini-App Yapılandırması
+      // Farcaster Frames v2 Yapılandırması (Gerçek Adres Tanımlandı)
       "fc:frame": JSON.stringify({
         version: "next",
         imageUrl: minikitConfig.miniapp.heroImageUrl,
@@ -27,7 +26,7 @@ export async function generateMetadata(): Promise<Metadata> {
           action: {
             type: "launch_frame",
             name: minikitConfig.miniapp.name,
-            url: "https://uygulamaniz.vercel.app/", // Kendi canlı Vercel URL'niz ile güncelleyin
+            url: "https://base-bingo-rho.vercel.app/",
             splashImageUrl: minikitConfig.miniapp.heroImageUrl,
             splashBackgroundColor: "#0f172a",
           },
@@ -47,7 +46,6 @@ const sourceCodePro = Source_Code_Pro({
   subsets: ["latin"],
 });
 
-// 2. ANA ISKELET (ROOT LAYOUT)
 export default function RootLayout({
   children,
 }: {
@@ -56,10 +54,9 @@ export default function RootLayout({
   return (
     <html lang="en">
       <head>
-        {/* Base App ID doğrulaması (HTML Head Seviyesi) */}
         <meta name="base:app_id" content="6a3eab37fb80a74d69497aa5" />
       </head>
-      <body className={`${inter.variable} ${sourceCodePro.variable} antialiased bg-slate-950`}>
+      <body className={`${inter.variable} ${sourceCodePro.variable} antialiased bg-slate-950 text-white`}>
         <RootProvider>
           <SafeArea>{children}</SafeArea>
         </RootProvider>
