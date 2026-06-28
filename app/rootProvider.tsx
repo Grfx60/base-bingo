@@ -50,8 +50,10 @@ export function RootProvider({ children }: { children: ReactNode }) {
         autoConnect: true,
         notificationProxyUrl: undefined,
       }}
+      // Base Builder Code entegrasyonu (Projenizden dönen işlemleri Base ağına raporlar)
+      projectId="bc_18cuakt7" 
     >
       {children}
     </OnchainKitProvider>
-  );
+  );   
 }

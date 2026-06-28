@@ -13,7 +13,7 @@ const safeSupabaseAnonKey = supabaseAnonKey || "dummy-key";
 const supabase = createClient(safeSupabaseUrl, safeSupabaseAnonKey);
 
 const FIXED_WIDTH = 400;
-const FIXED_HEIGHT = 400; 
+const FIXED_HEIGHT = 400;
 const PADDLE_WIDTH = 80;
 const PADDLE_HEIGHT = 12;
 const BALL_RADIUS = 7;
@@ -22,7 +22,6 @@ export default function BrickBreakerMiniApp() {
   const { address, isConnected } = useAccount();
   const { connect, connectors } = useConnect();
   const { disconnect } = useDisconnect();
-  
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
   // --- OYUN AYARLARI ---
@@ -43,17 +42,16 @@ export default function BrickBreakerMiniApp() {
   const gameStateRef = useRef("menu");
   const paddleXRef = useRef((FIXED_WIDTH - PADDLE_WIDTH) / 2);
   const paddleWidthRef = useRef(PADDLE_WIDTH);
-  
   const ballXRef = useRef(FIXED_WIDTH / 2);
   const ballYRef = useRef(FIXED_HEIGHT - 30);
   const ballVxFRef = useRef(1.8);
   const ballVyFRef = useRef(-1.8);
   const bricksRef = useRef([]);
-  
+  const trailRef = useRef([]); // top için komet izi
+
   // Bonus (Power-up) Sistemleri
   const [activePowerUp, setActivePowerUp] = useState<string | null>(null);
-  const powerUpsRef = useRef([]); 
-  
+  const powerUpsRef = useRef([]);
   const isFrozenRef = useRef(false);
   const isFireRef = useRef(false);
 
@@ -93,32 +91,40 @@ export default function BrickBreakerMiniApp() {
       else if (type === "brick") { osc.frequency.setValueAtTime(340, ctx.currentTime); gain.gain.setValueAtTime(0.05, ctx.currentTime); osc.start(); osc.stop(ctx.currentTime + 0.06); }
       else if (type === "lose") { osc.frequency.setValueAtTime(120, ctx.currentTime); gain.gain.setValueAtTime(0.1, ctx.currentTime); osc.start(); osc.stop(ctx.currentTime + 0.3); }
       else if (type === "powerup") { osc.frequency.setValueAtTime(440, ctx.currentTime); gain.gain.setValueAtTime(0.08, ctx.currentTime); osc.start(); osc.stop(ctx.currentTime + 0.15); }
-    } catch(e){}
+    } catch (e) { }
   }, [isMuted]);
 
-  const generateBricks = () => {
-    const rows = 4; const cols = 6; const padding = 8; const offsetTop = 35; const offsetLeft = 14;
-    const bWidth = (FIXED_WIDTH - offsetLeft * 2 - padding * (cols - 1)) / cols; const bHeight = 18;
-    const arr = [];
-    const colors = ["#A0C4FF", "#BDB2FF", "#FFADAD", "#FFD6A5"]; 
-    const shadows = ["#7EA5E0", "#9B8FE0", "#E08E8E", "#E0B788"]; 
-    const types = ["WIDE", "LIFE", "FREEZE", "FIRE"];
+  // --- NEON TUĞLA RENK PALETİ (görseldeki gibi) ---
+  const NEON_PALETTE = [
+    { fill: "#3b82f6", glow: "#60a5fa" }, // mavi
+    { fill: "#8b5cf6", glow: "#a78bfa" }, // mor
+    { fill: "#facc15", glow: "#fde047" }, // sarı
+    { fill: "#22d3ee", glow: "#67e8f9" }, // turkuaz
+    { fill: "#f43f5e", glow: "#fb7185" }, // kırmızı/pembe
+    { fill: "#f97316", glow: "#fb923c" }, // turuncu
+  ];
 
+  const generateBricks = () => {
+    const rows = 5; const cols = 6; const padding = 6; const offsetTop = 22; const offsetLeft = 14;
+    const bWidth = (FIXED_WIDTH - offsetLeft * 2 - padding * (cols - 1)) / cols; const bHeight = 20;
+    const arr = [];
+    const types = ["WIDE", "LIFE", "FREEZE", "FIRE"];
     for (let r = 0; r < rows; r++) {
       for (let c = 0; c < cols; c++) {
         const rand = Math.random();
         let chosenPowerUp = null;
-        if (rand < 0.28) {
+        if (rand < 0.22) {
           chosenPowerUp = types[Math.floor(Math.random() * types.length)];
         }
+        const palette = NEON_PALETTE[Math.floor(Math.random() * NEON_PALETTE.length)];
         arr.push({
           x: c * (bWidth + padding) + offsetLeft,
           y: r * (bHeight + padding) + offsetTop,
           width: bWidth,
           height: bHeight,
           status: 1,
-          color: colors[r % colors.length],
-          shadowColor: shadows[r % shadows.length],
+          color: palette.fill,
+          shadowColor: palette.glow,
           hasPowerUp: chosenPowerUp
         });
       }
@@ -134,21 +140,23 @@ export default function BrickBreakerMiniApp() {
     powerUpsRef.current = [];
     isFrozenRef.current = false;
     isFireRef.current = false;
+    trailRef.current = [];
     paddleXRef.current = (FIXED_WIDTH - paddleWidthRef.current) / 2;
-    generateBricks(); 
+    generateBricks();
     resetBall(1);
     setGameState("playing");
   };
 
   const resetBall = (currentLevel = levelRef.current) => {
-    ballXRef.current = FIXED_WIDTH / 2; 
+    ballXRef.current = FIXED_WIDTH / 2;
     ballYRef.current = FIXED_HEIGHT - 35;
-    let speedMultiplier = 1.8 + (currentLevel - 1) * 0.15; 
+    let speedMultiplier = 1.8 + (currentLevel - 1) * 0.15;
     if (isFrozenRef.current) {
       speedMultiplier = speedMultiplier * 0.5;
     }
     ballVxFRef.current = Math.random() > 0.5 ? speedMultiplier : -speedMultiplier;
     ballVyFRef.current = -speedMultiplier;
+    trailRef.current = [];
   };
 
   const checkVictory = () => {
@@ -163,20 +171,22 @@ export default function BrickBreakerMiniApp() {
 
   useEffect(() => {
     let animId;
+
     const update = () => {
       if (gameStateRef.current !== "playing") return;
-      
-      ballXRef.current += ballVxFRef.current; 
+      ballXRef.current += ballVxFRef.current;
       ballYRef.current += ballVyFRef.current;
+
+      // komet izi için son konumları sakla
+      trailRef.current.push({ x: ballXRef.current, y: ballYRef.current });
+      if (trailRef.current.length > 8) trailRef.current.shift();
 
       if (ballXRef.current + BALL_RADIUS > FIXED_WIDTH || ballXRef.current - BALL_RADIUS < 0) { ballVxFRef.current = -ballVxFRef.current; playAudio("hit"); }
       if (ballYRef.current - BALL_RADIUS < 0) { ballVyFRef.current = -ballVyFRef.current; playAudio("hit"); }
-
       if (ballVyFRef.current > 0 && ballYRef.current + BALL_RADIUS >= FIXED_HEIGHT - PADDLE_HEIGHT - 4 && ballXRef.current >= paddleXRef.current && ballXRef.current <= paddleXRef.current + paddleWidthRef.current) {
-        ballVyFRef.current = -ballVyFRef.current; 
+        ballVyFRef.current = -ballVyFRef.current;
         playAudio("hit");
       }
-
       if (ballYRef.current > FIXED_HEIGHT) {
         playAudio("lose"); const nextLives = livesRef.current - 1; setLives(nextLives);
         if (nextLives <= 0) setGameState("gameover"); else resetBall();
@@ -185,14 +195,12 @@ export default function BrickBreakerMiniApp() {
       bricksRef.current.forEach((b) => {
         if (b.status <= 0) return;
         if (ballXRef.current >= b.x && ballXRef.current <= b.x + b.width && ballYRef.current >= b.y && ballYRef.current <= b.y + b.height) {
-          b.status = 0; 
-          setScore((s) => s + 10); 
+          b.status = 0;
+          setScore((s) => s + 10);
           playAudio("brick");
-
           if (!isFireRef.current) {
-            ballVyFRef.current = -ballVyFRef.current; 
+            ballVyFRef.current = -ballVyFRef.current;
           }
-
           if (b.hasPowerUp) {
             powerUpsRef.current.push({
               x: b.x + b.width / 2,
@@ -205,19 +213,17 @@ export default function BrickBreakerMiniApp() {
       });
 
       powerUpsRef.current.forEach((p, idx) => {
-        p.y += 1.2; 
-
+        p.y += 1.2;
         if (p.y >= FIXED_HEIGHT - PADDLE_HEIGHT - 10 && p.y <= FIXED_HEIGHT && p.x >= paddleXRef.current && p.x <= paddleXRef.current + paddleWidthRef.current) {
           playAudio("powerup");
-          
           if (p.type === "WIDE") {
             paddleWidthRef.current = PADDLE_WIDTH * 1.4;
             setActivePowerUp("Geniş Pedal");
             setTimeout(() => { paddleWidthRef.current = PADDLE_WIDTH; setActivePowerUp(null); }, 5000);
-          } 
+          }
           else if (p.type === "LIFE") {
             setLives(l => l + 1);
-          } 
+          }
           else if (p.type === "FREEZE") {
             if (!isFrozenRef.current) {
               isFrozenRef.current = true;
@@ -231,7 +237,7 @@ export default function BrickBreakerMiniApp() {
                 setActivePowerUp(null);
               }, 5000);
             }
-          } 
+          }
           else if (p.type === "FIRE") {
             isFireRef.current = true;
             setActivePowerUp("🔥 Ateş Topu");
@@ -240,7 +246,6 @@ export default function BrickBreakerMiniApp() {
               setActivePowerUp(null);
             }, 5000);
           }
-
           powerUpsRef.current.splice(idx, 1);
         }
         else if (p.y > FIXED_HEIGHT) {
@@ -252,52 +257,128 @@ export default function BrickBreakerMiniApp() {
     const render = () => {
       const canvas = canvasRef.current; if (!canvas) return;
       const ctx = canvas.getContext("2d"); if (!ctx) return;
-      ctx.clearRect(0, 0, FIXED_WIDTH, FIXED_HEIGHT);
-      ctx.fillStyle = "#0f172a"; ctx.fillRect(0, 0, FIXED_WIDTH, FIXED_HEIGHT);
 
+      // --- NEON ARKA PLAN (lacivert + altıgen ızgara) ---
+      ctx.clearRect(0, 0, FIXED_WIDTH, FIXED_HEIGHT);
+      const bgGrad = ctx.createLinearGradient(0, 0, 0, FIXED_HEIGHT);
+      bgGrad.addColorStop(0, "#070b1f");
+      bgGrad.addColorStop(1, "#0a1029");
+      ctx.fillStyle = bgGrad;
+      ctx.fillRect(0, 0, FIXED_WIDTH, FIXED_HEIGHT);
+
+      // ince altıgen ızgara deseni
+      ctx.save();
+      ctx.strokeStyle = "rgba(59, 130, 246, 0.08)";
+      ctx.lineWidth = 1;
+      const hexSize = 26;
+      for (let row = 0; row < FIXED_HEIGHT / (hexSize * 0.87) + 2; row++) {
+        for (let col = 0; col < FIXED_WIDTH / (hexSize * 1.5) + 2; col++) {
+          const cx = col * hexSize * 1.5 + (row % 2 === 0 ? 0 : hexSize * 0.75);
+          const cy = row * hexSize * 0.87;
+          ctx.beginPath();
+          for (let i = 0; i < 6; i++) {
+            const angle = (Math.PI / 3) * i;
+            const px = cx + hexSize * 0.5 * Math.cos(angle);
+            const py = cy + hexSize * 0.5 * Math.sin(angle);
+            if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+          }
+          ctx.closePath();
+          ctx.stroke();
+        }
+      }
+      ctx.restore();
+
+      // --- NEON TUĞLALAR ---
       bricksRef.current.forEach((b) => {
         if (b.status <= 0) return;
         ctx.save();
-        const radius = 5;
-        ctx.fillStyle = b.shadowColor;
-        ctx.beginPath(); ctx.roundRect(b.x, b.y + 3, b.width, b.height, radius); ctx.fill();
-        ctx.fillStyle = b.color;
+        const radius = 6;
+        ctx.shadowColor = b.shadowColor;
+        ctx.shadowBlur = 12;
+
+        // ana gövde - hafif gradyan ile cam/parlak görünüm
+        const grad = ctx.createLinearGradient(b.x, b.y, b.x, b.y + b.height);
+        grad.addColorStop(0, b.shadowColor);
+        grad.addColorStop(1, b.color);
+        ctx.fillStyle = grad;
         ctx.beginPath(); ctx.roundRect(b.x, b.y, b.width, b.height, radius); ctx.fill();
-        ctx.fillStyle = "rgba(255, 255, 255, 0.25)";
-        ctx.beginPath(); ctx.roundRect(b.x + 2, b.y + 2, b.width - 4, 4, 2); ctx.fill();
+
+        // üst parlama çizgisi
+        ctx.shadowBlur = 0;
+        ctx.fillStyle = "rgba(255, 255, 255, 0.35)";
+        ctx.beginPath(); ctx.roundRect(b.x + 3, b.y + 2, b.width - 6, b.height * 0.32, 3); ctx.fill();
         ctx.restore();
       });
 
+      // --- POWER-UPS ---
       powerUpsRef.current.forEach((p) => {
         let pColor = "#38bdf8";
         let pIcon = "↔️";
         if (p.type === "LIFE") { pColor = "#f43f5e"; pIcon = "❤️"; }
         else if (p.type === "FREEZE") { pColor = "#60a5fa"; pIcon = "❄️"; }
         else if (p.type === "FIRE") { pColor = "#f97316"; pIcon = "🔥"; }
-
+        ctx.save();
+        ctx.shadowColor = pColor;
+        ctx.shadowBlur = 10;
         ctx.fillStyle = pColor;
         ctx.beginPath(); ctx.arc(p.x, p.y, 9, 0, Math.PI * 2); ctx.fill();
+        ctx.shadowBlur = 0;
         ctx.fillStyle = "#ffffff";
         ctx.font = "bold 9px sans-serif";
         ctx.fillText(pIcon, p.x - 5, p.y + 3);
+        ctx.restore();
       });
 
-      ctx.fillStyle = "#3b82f6";
-      ctx.beginPath(); ctx.roundRect(paddleXRef.current, FIXED_HEIGHT - PADDLE_HEIGHT - 4, paddleWidthRef.current, PADDLE_HEIGHT, 4); ctx.fill();
+      // --- NEON PEDAL (ışıltılı) ---
+      const padY = FIXED_HEIGHT - PADDLE_HEIGHT - 4;
+      ctx.save();
+      ctx.shadowColor = "#3b82f6";
+      ctx.shadowBlur = 16;
+      const padGrad = ctx.createLinearGradient(paddleXRef.current, padY, paddleXRef.current, padY + PADDLE_HEIGHT);
+      padGrad.addColorStop(0, "#60a5fa");
+      padGrad.addColorStop(1, "#1d4ed8");
+      ctx.fillStyle = padGrad;
+      ctx.beginPath(); ctx.roundRect(paddleXRef.current, padY, paddleWidthRef.current, PADDLE_HEIGHT, 6); ctx.fill();
+      ctx.shadowBlur = 0;
+      ctx.fillStyle = "rgba(255, 255, 255, 0.55)";
+      ctx.beginPath(); ctx.roundRect(paddleXRef.current + paddleWidthRef.current * 0.12, padY + 3, paddleWidthRef.current * 0.76, 2.5, 2); ctx.fill();
+      ctx.restore();
 
-      if (isFireRef.current) {
-        ctx.fillStyle = "#f97316";
-      } else if (isFrozenRef.current) {
-        ctx.fillStyle = "#60a5fa";
-      } else {
-        ctx.fillStyle = "#f43f5e";
-      }
+      // --- KOMET İZLİ NEON TOP ---
+      let ballColor = "#ef4444";
+      if (isFireRef.current) ballColor = "#f97316";
+      else if (isFrozenRef.current) ballColor = "#60a5fa";
+
+      // iz (trail)
+      trailRef.current.forEach((t, i) => {
+        const alpha = (i / trailRef.current.length) * 0.35;
+        ctx.save();
+        ctx.globalAlpha = alpha;
+        ctx.fillStyle = ballColor;
+        ctx.beginPath(); ctx.arc(t.x, t.y, BALL_RADIUS * (0.4 + i / trailRef.current.length * 0.6), 0, Math.PI * 2); ctx.fill();
+        ctx.restore();
+      });
+
+      ctx.save();
+      ctx.shadowColor = ballColor;
+      ctx.shadowBlur = 18;
+      const ballGrad = ctx.createRadialGradient(
+        ballXRef.current - 2, ballYRef.current - 2, 1,
+        ballXRef.current, ballYRef.current, BALL_RADIUS
+      );
+      ballGrad.addColorStop(0, "#ffffff");
+      ballGrad.addColorStop(0.4, ballColor);
+      ballGrad.addColorStop(1, ballColor);
+      ctx.fillStyle = ballGrad;
       ctx.beginPath(); ctx.arc(ballXRef.current, ballYRef.current, BALL_RADIUS, 0, Math.PI * 2); ctx.fill();
-      
+      ctx.restore();
+
       if (isFireRef.current || isFrozenRef.current) {
-        ctx.strokeStyle = isFireRef.current ? "rgba(249, 115, 22, 0.4)" : "rgba(96, 165, 250, 0.4)";
+        ctx.save();
+        ctx.strokeStyle = isFireRef.current ? "rgba(249, 115, 22, 0.5)" : "rgba(96, 165, 250, 0.5)";
         ctx.lineWidth = 4;
-        ctx.beginPath(); ctx.arc(ballXRef.current, ballYRef.current, BALL_RADIUS + 2, 0, Math.PI * 2); ctx.stroke();
+        ctx.beginPath(); ctx.arc(ballXRef.current, ballYRef.current, BALL_RADIUS + 3, 0, Math.PI * 2); ctx.stroke();
+        ctx.restore();
       }
     };
 
@@ -332,7 +413,6 @@ export default function BrickBreakerMiniApp() {
 
   return (
     <div className="w-full max-w-md mx-auto p-4 bg-slate-900 border border-slate-800 rounded-2xl text-white shadow-2xl flex flex-col gap-3 select-none overflow-hidden">
-      
       {/* ÜST PANEL */}
       <div className="flex justify-between items-center border-b border-slate-800 pb-2">
         <div>
@@ -370,13 +450,11 @@ export default function BrickBreakerMiniApp() {
           onTouchStart={handleTouchMove}
           className="w-full h-full block touch-none cursor-crosshair"
         />
-
         {activePowerUp && (
           <div className="absolute top-2 left-2 bg-blue-600/80 backdrop-blur-sm px-2 py-0.5 rounded text-[9px] font-bold tracking-wide animate-pulse">
             {activePowerUp} AKTİF!
           </div>
         )}
-
         {gameState !== "playing" && (
           <div className="absolute inset-0 bg-slate-950/90 backdrop-blur-sm flex flex-col items-center justify-center p-4 text-center">
             {gameState === "menu" && (
@@ -422,7 +500,7 @@ export default function BrickBreakerMiniApp() {
           Share 📤
         </button>
       </div>
-
     </div>
   );
 }
+
