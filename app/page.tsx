@@ -25,7 +25,7 @@ export default function Page() {
     try {
       setLoading(true);
       await signMessageAsync({
-        message: "Base-Bingo oyununa giriş yapmak ve şartları kabul etmek için bu mesajı onaylayın.",
+        message: "Base Brick Breaker oyununa giriş yapmak ve şartları kabul etmek için bu mesajı onaylayın.",
       });
       setIsSigned(true);
     } catch (error) {
@@ -40,8 +40,8 @@ export default function Page() {
   if (!isConnected) {
     return (
       <div className="flex flex-col items-center justify-center min-h-screen p-4 bg-slate-900 text-white">
-        <h1 className="text-4xl font-extrabold mb-2 tracking-wide text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-emerald-400">
-          Base-Bingo
+        <h1 className="text-4xl font-extrabold mb-2 tracking-wide text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-purple-400">
+          Base Brick Breaker
         </h1>
         <p className="text-slate-400 mb-8 text-center max-w-sm">
           Oyuna giriş yapabilmek için lütfen cüzdanınızı bağlayın.
@@ -69,7 +69,7 @@ export default function Page() {
   if (!isSigned) {
     return (
       <div className="flex flex-col items-center justify-center min-h-screen p-4 bg-slate-900 text-white">
-        <h1 className="text-4xl font-extrabold mb-2 tracking-wide text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-emerald-400">
+        <h1 className="text-4xl font-extrabold mb-2 tracking-wide text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-purple-400">
           Giriş Onayı
         </h1>
         <p className="text-emerald-400 font-medium mb-6 bg-emerald-500/10 px-4 py-1.5 rounded-full border border-emerald-500/20 text-sm">
