@@ -55,31 +55,24 @@ export default function BrickBreakerMiniApp() {
   useEffect(() => { livesRef.current = lives; }, [lives]);
   useEffect(() => { gameStateRef.current = gameState; }, [gameState]);
 
-  // 🛠️ DOKÜMANTASYONA %100 UYUMLU RESMİ BAŞLATICI (INIT + READY)
+  // Farcaster SDK Entegrasyonu
   useEffect(() => {
     const initFarcasterMiniApp = async () => {
       try {
         const { sdk } = await import("@farcaster/miniapp-sdk");
         if (sdk) {
-          // 1. Önce SDK'yı sisteme tanıtıyoruz (init)
           await sdk.actions.init();
           setIsSdkLoaded(true);
-          
-          // 2. Sistem hazır olduğunda ekranı açıyoruz (ready)
           await sdk.actions.ready();
-          console.log("Farcaster v2 Başarıyla İlklendirildi ve Tetiklendi!");
         }
       } catch (e) {
-        console.error("Farcaster yükleme hatası:", e);
-        // Normal tarayıcıda da oyunun çalışabilmesi için yükleme durumunu true yapıyoruz
         setIsSdkLoaded(true);
       }
     };
-
     initFarcasterMiniApp();
   }, []);
 
-  // Ses Efektleri
+  // Yapay Ses Üretici
   const playAudio = useCallback((type) => {
     if (isMuted) return;
     try {
@@ -96,8 +89,7 @@ export default function BrickBreakerMiniApp() {
   }, [isMuted]);
 
   const generateBricks = () => {
-    const rows = 4;
-    const cols = 6; const padding = 6; const offsetTop = 30; const offsetLeft = 12;
+    const rows = 4; const cols = 6; const padding = 6; const offsetTop = 30; const offsetLeft = 12;
     const bWidth = (FIXED_WIDTH - offsetLeft * 2 - padding * (cols - 1)) / cols; const bHeight = 16;
     const arr = [];
     const colors = ["#4A90E2", "#B37FEB", "#FF4D4F", "#FF9C6E"];
@@ -132,6 +124,7 @@ export default function BrickBreakerMiniApp() {
     ballVxFRef.current = 3; ballVyFRef.current = -3;
   };
 
+  // Oyun Döngüsü Motoru
   useEffect(() => {
     let animId;
     const update = () => {
@@ -179,6 +172,7 @@ export default function BrickBreakerMiniApp() {
     return () => cancelAnimationFrame(animId);
   }, [gameState, playAudio]);
 
+  // 🖱️ BİLGİSAYAR FARESİ KONTROLÜ
   const handlePointerMove = (e) => {
     if (gameState !== "playing" || !canvasRef.current) return;
     const rect = canvasRef.current.getBoundingClientRect();
@@ -186,11 +180,22 @@ export default function BrickBreakerMiniApp() {
     paddleXRef.current = Math.max(0, Math.min(FIXED_WIDTH - paddleWidthRef.current, canvasX - paddleWidthRef.current / 2));
   };
 
-  // SDK yüklenene kadar küçük bir yükleniyor ekranı gösteriyoruz (Sonsuz döngüyü kırar)
+  // 📱 MOBİL DOKUNMATİK EKRAN KONTROLÜ (YENİ EKLENDİ)
+  const handleTouchMove = (e) => {
+    if (gameState !== "playing" || !canvasRef.current || e.touches.length === 0) return;
+    // Telefonun ekranı aşağı kaydırmasını engelliyoruz
+    if (e.cancelable) e.preventDefault();
+    
+    const rect = canvasRef.current.getBoundingClientRect();
+    const touch = e.touches[0];
+    const canvasX = (touch.clientX - rect.left) * (FIXED_WIDTH / rect.width);
+    paddleXRef.current = Math.max(0, Math.min(FIXED_WIDTH - paddleWidthRef.current, canvasX - paddleWidthRef.current / 2));
+  };
+
   if (!isSdkLoaded) {
     return (
       <div className="w-full max-w-md mx-auto p-8 bg-slate-900 border border-slate-800 rounded-2xl text-center text-slate-400 font-mono text-xs">
-        Loading Farcaster SDK...
+        Loading...
       </div>
     );
   }
@@ -216,20 +221,22 @@ export default function BrickBreakerMiniApp() {
         </button>
       </div>
 
-      {/* DURUM GÖSTERGELERI */}
+      {/* DURUM GÖSTERGELERİ */}
       <div className="grid grid-cols-3 text-center text-[11px] bg-slate-950 py-1.5 px-2 rounded-xl border border-slate-800 font-mono gap-1">
         <div>SCORE: <span className="text-emerald-400 font-bold">{score}</span></div>
         <div>LIVES: <span className="text-red-400 font-bold">{"❤️".repeat(Math.max(0, lives))}</span></div>
         <div>LEVEL: <span className="text-purple-400 font-bold">{level}</span></div>
       </div>
 
-      {/* OYUN EKRANI */}
+      {/* OYUN CANVAS EKRANI (DOKUNMATİK DESTEKLİ) */}
       <div className="relative flex justify-center bg-slate-950 rounded-xl overflow-hidden border border-slate-800 aspect-[400/400] w-full">
         <canvas
           ref={canvasRef}
           width={FIXED_WIDTH}
           height={FIXED_HEIGHT}
           onPointerMove={handlePointerMove}
+          onTouchMove={handleTouchMove}
+          onTouchStart={handleTouchMove} // Parmağı ilk bastığı anda da algılasın diye
           className="w-full h-full block touch-none cursor-crosshair"
         />
 
