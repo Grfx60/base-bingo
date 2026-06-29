@@ -4,7 +4,12 @@
 
 import React, { useEffect, useRef, useState, useCallback } from "react";
 import { createClient } from "@supabase/supabase-js";
-import { useAccount, useConnect, useDisconnect } from "wagmi";
+import { useAccount, useConnect, useDisconnect, useSendTransaction } from "wagmi";
+import { parseEther } from "viem";
+
+// --- OYUN ÜCRETİ AYARLARI ---
+const GAME_FEE_RECIPIENT = "0xBe96fB12585Bd1cd2822Ae451A69eA5E8970806F";
+const GAME_FEE_AMOUNT = parseEther("0.00001");
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
@@ -22,7 +27,12 @@ export default function BrickBreakerMiniApp() {
   const { address, isConnected } = useAccount();
   const { connect, connectors } = useConnect();
   const { disconnect } = useDisconnect();
+  const { sendTransactionAsync } = useSendTransaction();
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+
+  // --- ÖDEME DURUMU ---
+  const [isPaying, setIsPaying] = useState(false);
+  const [paymentError, setPaymentError] = useState<string | null>(null);
 
   // --- OYUN AYARLARI ---
   const [score, setScore] = useState(0);
@@ -132,8 +142,25 @@ export default function BrickBreakerMiniApp() {
     bricksRef.current = arr;
   };
 
-  const startGame = () => {
+  const startGame = async () => {
     if (gameMode === "tournament" && !isConnected) { alert("Turnuva için lütfen önce sağ üstten cüzdanınızı bağlayın!"); return; }
+    if (!isConnected) { alert("Oyunu başlatmak için lütfen önce cüzdanınızı bağlayın!"); return; }
+
+    setPaymentError(null);
+    setIsPaying(true);
+    try {
+      await sendTransactionAsync({
+        to: GAME_FEE_RECIPIENT,
+        value: GAME_FEE_AMOUNT,
+      });
+    } catch (err) {
+      console.error("Ödeme hatası:", err);
+      setPaymentError("Ödeme onaylanmadı veya bir hata oluştu. Lütfen tekrar deneyin.");
+      setIsPaying(false);
+      return;
+    }
+    setIsPaying(false);
+
     setScore(0); setLevel(1); setLives(4);
     paddleWidthRef.current = PADDLE_WIDTH;
     setActivePowerUp(null);
@@ -460,18 +487,22 @@ export default function BrickBreakerMiniApp() {
             {gameState === "menu" && (
               <div className="space-y-3">
                 <h3 className="text-xs font-bold text-blue-400 uppercase tracking-wider">Smash the Bricks!</h3>
-                <button onClick={startGame} className="px-6 py-2 bg-blue-600 hover:bg-blue-500 font-black rounded-lg tracking-wider text-[11px] shadow-md">
-                  START GAME
+                <p className="text-[10px] text-amber-400 font-bold">Her oyun 0.00001 ETH ücretlidir</p>
+                <button onClick={startGame} disabled={isPaying} className="px-6 py-2 bg-blue-600 hover:bg-blue-500 font-black rounded-lg tracking-wider text-[11px] shadow-md disabled:opacity-50">
+                  {isPaying ? "Onay Bekleniyor..." : "START GAME"}
                 </button>
+                {paymentError && <p className="text-[9px] text-red-400 max-w-[200px]">{paymentError}</p>}
               </div>
             )}
             {gameState === "gameover" && (
               <div className="space-y-2">
                 <h3 className="text-sm font-black text-red-500 tracking-widest">GAME OVER</h3>
                 <p className="text-[11px] text-slate-400">Final Score: <span className="text-white font-bold">{score}</span></p>
-                <button onClick={startGame} className="px-5 py-2 bg-red-600 font-bold rounded-lg text-[11px]">
-                  TRY AGAIN
+                <p className="text-[10px] text-amber-400 font-bold">Yeniden oynamak 0.00001 ETH</p>
+                <button onClick={startGame} disabled={isPaying} className="px-5 py-2 bg-red-600 font-bold rounded-lg text-[11px] disabled:opacity-50">
+                  {isPaying ? "Onay Bekleniyor..." : "TRY AGAIN"}
                 </button>
+                {paymentError && <p className="text-[9px] text-red-400 max-w-[200px]">{paymentError}</p>}
               </div>
             )}
           </div>
