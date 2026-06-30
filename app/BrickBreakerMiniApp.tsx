@@ -4,9 +4,8 @@
 
 import React, { useEffect, useRef, useState, useCallback } from "react";
 import { createClient } from "@supabase/supabase-js";
-import { useAccount, useConnect, useDisconnect, useSendTransaction, useChainId, useSwitchChain } from "wagmi";
+import { useAccount, useConnect, useDisconnect, useSendTransaction } from "wagmi";
 import { parseEther } from "viem";
-import { base, soneium } from "./rootProvider";
 
 // --- OYUN ÜCRETİ AYARLARI ---
 const GAME_FEE_RECIPIENT = "0xBe96fB12585Bd1cd2822Ae451A69eA5E8970806F";
@@ -29,8 +28,6 @@ export default function BrickBreakerMiniApp() {
   const { connect, connectors } = useConnect();
   const { disconnect } = useDisconnect();
   const { sendTransactionAsync } = useSendTransaction();
-  const chainId = useChainId();
-  const { switchChain } = useSwitchChain();
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
   // --- ÖDEME DURUMU ---
@@ -365,7 +362,7 @@ export default function BrickBreakerMiniApp() {
         ctx.save();
         const radius = 6;
         ctx.shadowColor = b.shadowColor;
-        ctx.shadowBlur = 12;
+        ctx.shadowBlur = 6;
 
         // ana gövde - hafif gradyan ile cam/parlak görünüm
         const grad = ctx.createLinearGradient(b.x, b.y, b.x, b.y + b.height);
@@ -376,7 +373,7 @@ export default function BrickBreakerMiniApp() {
 
         // üst parlama çizgisi
         ctx.shadowBlur = 0;
-        ctx.fillStyle = "rgba(255, 255, 255, 0.35)";
+        ctx.fillStyle = "rgba(255, 255, 255, 0.25)";
         ctx.beginPath(); ctx.roundRect(b.x + 3, b.y + 2, b.width - 6, b.height * 0.32, 3); ctx.fill();
         ctx.restore();
       });
@@ -474,25 +471,43 @@ export default function BrickBreakerMiniApp() {
     paddleXRef.current = Math.max(0, Math.min(FIXED_WIDTH - paddleWidthRef.current, canvasX - paddleWidthRef.current / 2));
   };
 
-  // Paylaşım: Farcaster (composeCast SDK) veya X (Twitter) seçeneği sunulur
-  const getShareText = () => `Base Brick Breaker oyununda ${score} puan topladım! Sen de katıl ve tuğlaları kır 🚀`;
+  // SDK action'ları gerçek Farcaster/Base App ortamı dışında sonsuza kadar bekleyebiliyor,
+  // bu yüzden belirli bir süre sonra otomatik olarak yedek yönteme geçiyoruz.
+  const withTimeout = (promise, ms) => {
+    return Promise.race([
+      promise,
+      new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), ms)),
+    ]);
+  };
+
+  // Her oyuncunun kendi cüzdan adresinden türetilen sabit bir referans kodu
+  const referralCode = address ? address.slice(2, 8).toUpperCase() : "MISAFIR";
+  const getShareText = () => `Base Brick Breaker'da ${score} puan topladım! 🚀 Referans kodum: ${referralCode}`;
+  const getReferralLink = () => {
+    if (typeof window === "undefined") return "";
+    const url = new URL(window.location.href);
+    url.searchParams.set("ref", referralCode);
+    return url.toString();
+  };
 
   const handleShareFarcaster = async () => {
     setShareMenuOpen(false);
     const shareText = getShareText();
+    const refLink = getReferralLink();
     try {
       const { sdk } = await import("@farcaster/miniapp-sdk");
-      await sdk.actions.composeCast({
-        text: shareText,
-        embeds: [typeof window !== "undefined" ? window.location.href : ""],
-      });
+      await withTimeout(sdk.actions.composeCast({ text: shareText, embeds: [refLink] }), 1500);
     } catch (e) {
-      console.warn("composeCast başarısız, link kopyalanıyor:", e);
+      console.warn("composeCast başarısız, yedek yönteme geçiliyor:", e);
       try {
-        await navigator.clipboard.writeText(`${shareText} ${window.location.href}`);
-        alert("Paylaşım metni kopyalandı!");
-      } catch (clipErr) {
-        console.error("Kopyalama da başarısız:", clipErr);
+        if (navigator.share) {
+          await navigator.share({ text: shareText, url: refLink });
+        } else {
+          await navigator.clipboard.writeText(`${shareText} ${refLink}`);
+          alert("Paylaşım metni kopyalandı! Farcaster'a yapıştırabilirsiniz.");
+        }
+      } catch (fallbackErr) {
+        console.error("Paylaşım yedek yöntemi de başarısız:", fallbackErr);
       }
     }
   };
@@ -500,11 +515,11 @@ export default function BrickBreakerMiniApp() {
   const handleShareX = async () => {
     setShareMenuOpen(false);
     const shareText = getShareText();
-    const pageUrl = typeof window !== "undefined" ? window.location.href : "";
-    const xUrl = `https://twitter.com/intent/tweet?text=${encodeURIComponent(shareText)}&url=${encodeURIComponent(pageUrl)}`;
+    const refLink = getReferralLink();
+    const xUrl = `https://twitter.com/intent/tweet?text=${encodeURIComponent(shareText)}&url=${encodeURIComponent(refLink)}`;
     try {
       const { sdk } = await import("@farcaster/miniapp-sdk");
-      await sdk.actions.openUrl(xUrl);
+      await withTimeout(sdk.actions.openUrl(xUrl), 1200);
     } catch (e) {
       window.open(xUrl, "_blank");
     }
@@ -530,24 +545,6 @@ export default function BrickBreakerMiniApp() {
           <p className="text-[10px] text-slate-500 font-bold">Classic Arcade Edition</p>
         </div>
         <div className="flex flex-col items-end gap-1">
-          <div className="flex gap-1">
-            <button
-              onClick={() => switchChain({ chainId: base.id })}
-              className={`px-2 py-0.5 rounded text-[9px] font-bold transition-all ${
-                chainId === base.id ? "bg-blue-600 text-white" : "bg-slate-800 text-slate-400 border border-slate-700"
-              }`}
-            >
-              Base
-            </button>
-            <button
-              onClick={() => switchChain({ chainId: soneium.id })}
-              className={`px-2 py-0.5 rounded text-[9px] font-bold transition-all ${
-                chainId === soneium.id ? "bg-purple-600 text-white" : "bg-slate-800 text-slate-400 border border-slate-700"
-              }`}
-            >
-              Soneium
-            </button>
-          </div>
           <button
             onClick={() => isConnected ? disconnect() : (connectors[0] && connect({ connector: connectors[0] }))}
             className={`px-2.5 py-1 rounded-lg font-bold text-[11px] transition-all ${
