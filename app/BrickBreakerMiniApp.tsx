@@ -471,8 +471,9 @@ export default function BrickBreakerMiniApp() {
     paddleXRef.current = Math.max(0, Math.min(FIXED_WIDTH - paddleWidthRef.current, canvasX - paddleWidthRef.current / 2));
   };
 
-  // SDK action'ları gerçek Farcaster/Base App ortamı dışında sonsuza kadar bekleyebiliyor,
-  // bu yüzden belirli bir süre sonra otomatik olarak yedek yönteme geçiyoruz.
+  // SDK action'ları gerçek Farcaster/Base App ortamı dışında sessizce hiçbir şey yapmadan
+  // "başarılı" dönebiliyor (hata vermeden), bu yüzden önce gerçekten bir mini-app içinde
+  // olup olmadığımızı kontrol ediyoruz; değilsek doğrudan yedek yönteme geçiyoruz.
   const withTimeout = (promise, ms) => {
     return Promise.race([
       promise,
@@ -490,25 +491,34 @@ export default function BrickBreakerMiniApp() {
     return url.toString();
   };
 
+  const shareViaWebOrClipboard = async (shareText, refLink) => {
+    try {
+      if (navigator.share) {
+        await navigator.share({ text: shareText, url: refLink });
+      } else {
+        await navigator.clipboard.writeText(`${shareText} ${refLink}`);
+        alert("Paylaşım metni kopyalandı! İstediğin platforma yapıştırabilirsin.");
+      }
+    } catch (fallbackErr) {
+      console.error("Paylaşım yedek yöntemi de başarısız:", fallbackErr);
+    }
+  };
+
   const handleShareFarcaster = async () => {
     setShareMenuOpen(false);
     const shareText = getShareText();
     const refLink = getReferralLink();
     try {
       const { sdk } = await import("@farcaster/miniapp-sdk");
-      await withTimeout(sdk.actions.composeCast({ text: shareText, embeds: [refLink] }), 1500);
+      const inMiniApp = await withTimeout(sdk.isInMiniApp(), 1000).catch(() => false);
+      if (!inMiniApp) {
+        await shareViaWebOrClipboard(shareText, refLink);
+        return;
+      }
+      await withTimeout(sdk.actions.composeCast({ text: shareText, embeds: [refLink] }), 2000);
     } catch (e) {
       console.warn("composeCast başarısız, yedek yönteme geçiliyor:", e);
-      try {
-        if (navigator.share) {
-          await navigator.share({ text: shareText, url: refLink });
-        } else {
-          await navigator.clipboard.writeText(`${shareText} ${refLink}`);
-          alert("Paylaşım metni kopyalandı! Farcaster'a yapıştırabilirsiniz.");
-        }
-      } catch (fallbackErr) {
-        console.error("Paylaşım yedek yöntemi de başarısız:", fallbackErr);
-      }
+      await shareViaWebOrClipboard(shareText, refLink);
     }
   };
 
@@ -519,7 +529,12 @@ export default function BrickBreakerMiniApp() {
     const xUrl = `https://twitter.com/intent/tweet?text=${encodeURIComponent(shareText)}&url=${encodeURIComponent(refLink)}`;
     try {
       const { sdk } = await import("@farcaster/miniapp-sdk");
-      await withTimeout(sdk.actions.openUrl(xUrl), 1200);
+      const inMiniApp = await withTimeout(sdk.isInMiniApp(), 1000).catch(() => false);
+      if (!inMiniApp) {
+        window.open(xUrl, "_blank");
+        return;
+      }
+      await withTimeout(sdk.actions.openUrl(xUrl), 1500);
     } catch (e) {
       window.open(xUrl, "_blank");
     }
