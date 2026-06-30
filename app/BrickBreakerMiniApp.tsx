@@ -4,8 +4,9 @@
 
 import React, { useEffect, useRef, useState, useCallback } from "react";
 import { createClient } from "@supabase/supabase-js";
-import { useAccount, useConnect, useDisconnect, useSendTransaction } from "wagmi";
+import { useAccount, useConnect, useDisconnect, useSendTransaction, useChainId, useSwitchChain } from "wagmi";
 import { parseEther } from "viem";
+import { base, soneium } from "./rootProvider";
 
 // --- OYUN ÜCRETİ AYARLARI ---
 const GAME_FEE_RECIPIENT = "0xBe96fB12585Bd1cd2822Ae451A69eA5E8970806F";
@@ -28,6 +29,8 @@ export default function BrickBreakerMiniApp() {
   const { connect, connectors } = useConnect();
   const { disconnect } = useDisconnect();
   const { sendTransactionAsync } = useSendTransaction();
+  const chainId = useChainId();
+  const { switchChain } = useSwitchChain();
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
   // --- ÖDEME DURUMU ---
@@ -65,10 +68,22 @@ export default function BrickBreakerMiniApp() {
   const isFrozenRef = useRef(false);
   const isFireRef = useRef(false);
 
+  // Paylaşım menüsü (Farcaster / X seçimi)
+  const [shareMenuOpen, setShareMenuOpen] = useState(false);
+
   useEffect(() => { scoreRef.current = score; }, [score]);
   useEffect(() => { levelRef.current = level; }, [level]);
   useEffect(() => { livesRef.current = lives; }, [lives]);
   useEffect(() => { gameStateRef.current = gameState; }, [gameState]);
+
+  // Oyuncu XP / Seviye sistemi: her 100 XP'de bir seviye atlanır
+  useEffect(() => {
+    const required = playerLv * 100;
+    if (playerXp >= required) {
+      setPlayerLv((l) => l + 1);
+      setPlayerXp((xp) => xp - required);
+    }
+  }, [playerXp, playerLv]);
 
   // Farcaster SDK Entegrasyonu
   useEffect(() => {
@@ -114,18 +129,14 @@ export default function BrickBreakerMiniApp() {
     { fill: "#f97316", glow: "#fb923c" }, // turuncu
   ];
 
-  const generateBricks = () => {
-    const rows = 5; const cols = 6; const padding = 6; const offsetTop = 22; const offsetLeft = 14;
+  const generateBricks = (currentLevel = 1) => {
+    // Her 5 levelde bir tuğla sıra sayısı 1 artar (1-5: 5 sıra, 6-10: 6 sıra, ...)
+    const rows = 5 + Math.floor((currentLevel - 1) / 5);
+    const cols = 6; const padding = 6; const offsetTop = 22; const offsetLeft = 14;
     const bWidth = (FIXED_WIDTH - offsetLeft * 2 - padding * (cols - 1)) / cols; const bHeight = 20;
     const arr = [];
-    const types = ["WIDE", "LIFE", "FREEZE", "FIRE"];
     for (let r = 0; r < rows; r++) {
       for (let c = 0; c < cols; c++) {
-        const rand = Math.random();
-        let chosenPowerUp = null;
-        if (rand < 0.22) {
-          chosenPowerUp = types[Math.floor(Math.random() * types.length)];
-        }
         const palette = NEON_PALETTE[Math.floor(Math.random() * NEON_PALETTE.length)];
         arr.push({
           x: c * (bWidth + padding) + offsetLeft,
@@ -135,10 +146,38 @@ export default function BrickBreakerMiniApp() {
           status: 1,
           color: palette.fill,
           shadowColor: palette.glow,
-          hasPowerUp: chosenPowerUp
+          hasPowerUp: null
         });
       }
     }
+
+    // Tuğla sırasını karıştırıyoruz, böylece power-up'lar rastgele yerlere dağılır
+    const shuffledIndexes = arr.map((_, i) => i);
+    for (let i = shuffledIndexes.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [shuffledIndexes[i], shuffledIndexes[j]] = [shuffledIndexes[j], shuffledIndexes[i]];
+    }
+
+    const MAX_POWERUPS_PER_LEVEL = 5;
+    let powerUpCount = 0;
+    let cursor = 0;
+
+    // Her 3 levelde bir (3, 6, 9, ...) rastgele bir tuğlaya can (LIFE) power-up'ı yerleştirilir
+    if (currentLevel % 3 === 0 && shuffledIndexes.length > 0) {
+      arr[shuffledIndexes[cursor]].hasPowerUp = "LIFE";
+      powerUpCount++;
+      cursor++;
+    }
+
+    // Geri kalan power-up'lar tamamen rastgele (Dondurucu / Ateş / Pedal Uzatma), max 5 sınırı dahilinde
+    const regularTypes = ["FREEZE", "FIRE", "WIDE"];
+    for (; cursor < shuffledIndexes.length && powerUpCount < MAX_POWERUPS_PER_LEVEL; cursor++) {
+      if (Math.random() < 0.18) {
+        arr[shuffledIndexes[cursor]].hasPowerUp = regularTypes[Math.floor(Math.random() * regularTypes.length)];
+        powerUpCount++;
+      }
+    }
+
     bricksRef.current = arr;
   };
 
@@ -147,19 +186,23 @@ export default function BrickBreakerMiniApp() {
     if (!isConnected) { alert("Oyunu başlatmak için lütfen önce cüzdanınızı bağlayın!"); return; }
 
     setPaymentError(null);
-    setIsPaying(true);
-    try {
-      await sendTransactionAsync({
-        to: GAME_FEE_RECIPIENT,
-        value: GAME_FEE_AMOUNT,
-      });
-    } catch (err) {
-      console.error("Ödeme hatası:", err);
-      setPaymentError("Ödeme onaylanmadı veya bir hata oluştu. Lütfen tekrar deneyin.");
+
+    // Sadece Tournament modunda ücret alınır, Practice modu ücretsizdir (sadece bağlı cüzdan/sign yeterli)
+    if (gameMode === "tournament") {
+      setIsPaying(true);
+      try {
+        await sendTransactionAsync({
+          to: GAME_FEE_RECIPIENT,
+          value: GAME_FEE_AMOUNT,
+        });
+      } catch (err) {
+        console.error("Ödeme hatası:", err);
+        setPaymentError("Ödeme onaylanmadı veya bir hata oluştu. Lütfen tekrar deneyin.");
+        setIsPaying(false);
+        return;
+      }
       setIsPaying(false);
-      return;
     }
-    setIsPaying(false);
 
     setScore(0); setLevel(1); setLives(4);
     paddleWidthRef.current = PADDLE_WIDTH;
@@ -169,7 +212,7 @@ export default function BrickBreakerMiniApp() {
     isFireRef.current = false;
     trailRef.current = [];
     paddleXRef.current = (FIXED_WIDTH - paddleWidthRef.current) / 2;
-    generateBricks();
+    generateBricks(1);
     resetBall(1);
     setGameState("playing");
   };
@@ -191,7 +234,7 @@ export default function BrickBreakerMiniApp() {
     if (!anyLeft) {
       const nextLevel = level + 1;
       setLevel(nextLevel);
-      generateBricks();
+      generateBricks(nextLevel);
       resetBall(nextLevel);
     }
   };
@@ -224,6 +267,7 @@ export default function BrickBreakerMiniApp() {
         if (ballXRef.current >= b.x && ballXRef.current <= b.x + b.width && ballYRef.current >= b.y && ballYRef.current <= b.y + b.height) {
           b.status = 0;
           setScore((s) => s + 10);
+          setPlayerXp((x) => x + 5);
           playAudio("brick");
           if (!isFireRef.current) {
             ballVyFRef.current = -ballVyFRef.current;
@@ -430,6 +474,42 @@ export default function BrickBreakerMiniApp() {
     paddleXRef.current = Math.max(0, Math.min(FIXED_WIDTH - paddleWidthRef.current, canvasX - paddleWidthRef.current / 2));
   };
 
+  // Paylaşım: Farcaster (composeCast SDK) veya X (Twitter) seçeneği sunulur
+  const getShareText = () => `Base Brick Breaker oyununda ${score} puan topladım! Sen de katıl ve tuğlaları kır 🚀`;
+
+  const handleShareFarcaster = async () => {
+    setShareMenuOpen(false);
+    const shareText = getShareText();
+    try {
+      const { sdk } = await import("@farcaster/miniapp-sdk");
+      await sdk.actions.composeCast({
+        text: shareText,
+        embeds: [typeof window !== "undefined" ? window.location.href : ""],
+      });
+    } catch (e) {
+      console.warn("composeCast başarısız, link kopyalanıyor:", e);
+      try {
+        await navigator.clipboard.writeText(`${shareText} ${window.location.href}`);
+        alert("Paylaşım metni kopyalandı!");
+      } catch (clipErr) {
+        console.error("Kopyalama da başarısız:", clipErr);
+      }
+    }
+  };
+
+  const handleShareX = async () => {
+    setShareMenuOpen(false);
+    const shareText = getShareText();
+    const pageUrl = typeof window !== "undefined" ? window.location.href : "";
+    const xUrl = `https://twitter.com/intent/tweet?text=${encodeURIComponent(shareText)}&url=${encodeURIComponent(pageUrl)}`;
+    try {
+      const { sdk } = await import("@farcaster/miniapp-sdk");
+      await sdk.actions.openUrl(xUrl);
+    } catch (e) {
+      window.open(xUrl, "_blank");
+    }
+  };
+
   if (!isSdkLoaded) {
     return (
       <div className="w-full max-w-md mx-auto p-8 bg-slate-900 border border-slate-800 rounded-2xl text-center text-slate-400 font-mono text-xs">
@@ -449,14 +529,34 @@ export default function BrickBreakerMiniApp() {
           </h1>
           <p className="text-[10px] text-slate-500 font-bold">Classic Arcade Edition</p>
         </div>
-        <button
-          onClick={() => isConnected ? disconnect() : (connectors[0] && connect({ connector: connectors[0] }))}
-          className={`px-2.5 py-1 rounded-lg font-bold text-[11px] transition-all ${
-            isConnected ? "bg-slate-800 text-emerald-400 border border-emerald-500/20" : "bg-blue-600 text-white"
-          }`}
-        >
-          {isConnected ? `${address.slice(0, 4)}...${address.slice(-4)}` : "Connect Wallet"}
-        </button>
+        <div className="flex flex-col items-end gap-1">
+          <div className="flex gap-1">
+            <button
+              onClick={() => switchChain({ chainId: base.id })}
+              className={`px-2 py-0.5 rounded text-[9px] font-bold transition-all ${
+                chainId === base.id ? "bg-blue-600 text-white" : "bg-slate-800 text-slate-400 border border-slate-700"
+              }`}
+            >
+              Base
+            </button>
+            <button
+              onClick={() => switchChain({ chainId: soneium.id })}
+              className={`px-2 py-0.5 rounded text-[9px] font-bold transition-all ${
+                chainId === soneium.id ? "bg-purple-600 text-white" : "bg-slate-800 text-slate-400 border border-slate-700"
+              }`}
+            >
+              Soneium
+            </button>
+          </div>
+          <button
+            onClick={() => isConnected ? disconnect() : (connectors[0] && connect({ connector: connectors[0] }))}
+            className={`px-2.5 py-1 rounded-lg font-bold text-[11px] transition-all ${
+              isConnected ? "bg-slate-800 text-emerald-400 border border-emerald-500/20" : "bg-blue-600 text-white"
+            }`}
+          >
+            {isConnected ? `${address.slice(0, 4)}...${address.slice(-4)}` : "Connect Wallet"}
+          </button>
+        </div>
       </div>
 
       {/* DURUM GÖSTERGELERI */}
@@ -487,7 +587,6 @@ export default function BrickBreakerMiniApp() {
             {gameState === "menu" && (
               <div className="space-y-3">
                 <h3 className="text-xs font-bold text-blue-400 uppercase tracking-wider">Smash the Bricks!</h3>
-                <p className="text-[10px] text-amber-400 font-bold">Her oyun 0.00001 ETH ücretlidir</p>
                 <button onClick={startGame} disabled={isPaying} className="px-6 py-2 bg-blue-600 hover:bg-blue-500 font-black rounded-lg tracking-wider text-[11px] shadow-md disabled:opacity-50">
                   {isPaying ? "Onay Bekleniyor..." : "START GAME"}
                 </button>
@@ -498,7 +597,6 @@ export default function BrickBreakerMiniApp() {
               <div className="space-y-2">
                 <h3 className="text-sm font-black text-red-500 tracking-widest">GAME OVER</h3>
                 <p className="text-[11px] text-slate-400">Final Score: <span className="text-white font-bold">{score}</span></p>
-                <p className="text-[10px] text-amber-400 font-bold">Yeniden oynamak 0.00001 ETH</p>
                 <button onClick={startGame} disabled={isPaying} className="px-5 py-2 bg-red-600 font-bold rounded-lg text-[11px] disabled:opacity-50">
                   {isPaying ? "Onay Bekleniyor..." : "TRY AGAIN"}
                 </button>
@@ -526,12 +624,23 @@ export default function BrickBreakerMiniApp() {
         <button onClick={() => setGameMode(m => m === "tournament" ? "practice" : "tournament")} className="py-2 bg-slate-800 border border-slate-700 font-bold rounded-lg text-slate-300 text-center">
           {gameMode === "tournament" ? "🏆 Tournament" : "🕹️ Practice"}
         </button>
-        {/* Yenilenmiş Paylaşım Mesajı */}
-        <button onClick={() => window.open(`https://farcaster.com/~/compose?text=${encodeURIComponent(`Base Brick Breaker oyununda ${score} puan topladım! Sen de katıl ve tuğlaları kır 🚀`)}`, "_blank")} className="py-2 bg-indigo-600 font-bold rounded-lg text-center text-white shadow-sm">
-          Share 📤
-        </button>
+        {/* Yenilenmiş Paylaşım: Farcaster veya X seçimi sunan açılır menü */}
+        <div className="relative">
+          <button onClick={() => setShareMenuOpen((o) => !o)} className="w-full py-2 bg-indigo-600 font-bold rounded-lg text-center text-white shadow-sm">
+            Share 📤
+          </button>
+          {shareMenuOpen && (
+            <div className="absolute bottom-full mb-1 left-0 right-0 bg-slate-800 border border-slate-700 rounded-lg overflow-hidden shadow-xl z-10">
+              <button onClick={handleShareFarcaster} className="w-full px-3 py-2 text-[10px] font-bold text-left hover:bg-slate-700">
+                🟣 Farcaster
+              </button>
+              <button onClick={handleShareX} className="w-full px-3 py-2 text-[10px] font-bold text-left hover:bg-slate-700 border-t border-slate-700">
+                ✖️ X (Twitter)
+              </button>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
 }
-
