@@ -691,7 +691,7 @@ export default function BrickBreakerMiniApp() {
           {gameMode === "tournament" ? "🏆 Tournament" : "🕹️ Practice"}
         </button>
         <button onClick={openLeaderboard} className="py-2 bg-amber-600 font-bold rounded-lg text-center text-white shadow-sm">
-          📊 Sıralama
+          📊 Leaderboard
         </button>
         {/* Yenilenmiş Paylaşım: Farcaster veya X seçimi sunan açılır menü */}
         <div className="relative">
@@ -716,13 +716,13 @@ export default function BrickBreakerMiniApp() {
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={() => setIsLeaderboardOpen(false)}>
           <div className="bg-slate-900 border border-slate-700 rounded-2xl p-4 w-full max-w-sm max-h-[80vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
             <div className="flex justify-between items-center mb-3">
-              <h3 className="text-sm font-black text-amber-400 tracking-wide">🏆 En İyi 10 Skor</h3>
+              <h3 className="text-sm font-black text-amber-400 tracking-wide">🏆 Top 10 Leaderboard</h3>
               <button onClick={() => setIsLeaderboardOpen(false)} className="text-slate-400 hover:text-white text-lg leading-none">✕</button>
             </div>
             {leaderboardLoading ? (
-              <p className="text-[11px] text-slate-400 text-center py-6">Yükleniyor...</p>
+              <p className="text-[11px] text-slate-400 text-center py-6">Loading...</p>
             ) : leaderboardRows.length === 0 ? (
-              <p className="text-[11px] text-slate-400 text-center py-6">Henüz kayıtlı skor yok. İlk skoru sen koy!</p>
+              <p className="text-[11px] text-slate-400 text-center py-6">No scores yet. Be the first!</p>
             ) : (
               <div className="space-y-1.5">
                 {leaderboardRows.map((row, idx) => {
