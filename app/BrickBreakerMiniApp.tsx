@@ -46,6 +46,11 @@ export default function BrickBreakerMiniApp() {
   const [attemptsLeft, setAttemptsLeft] = useState(3);
   const [isSdkLoaded, setIsSdkLoaded] = useState(false);
 
+  // --- LEADERBOARD ---
+  const [isLeaderboardOpen, setIsLeaderboardOpen] = useState(false);
+  const [leaderboardRows, setLeaderboardRows] = useState<{ wallet_address: string; best_score: number; best_level: number }[]>([]);
+  const [leaderboardLoading, setLeaderboardLoading] = useState(false);
+
   const scoreRef = useRef(0);
   const levelRef = useRef(1);
   const livesRef = useRef(4);
@@ -115,6 +120,49 @@ export default function BrickBreakerMiniApp() {
       else if (type === "powerup") { osc.frequency.setValueAtTime(440, ctx.currentTime); gain.gain.setValueAtTime(0.08, ctx.currentTime); osc.start(); osc.stop(ctx.currentTime + 0.15); }
     } catch (e) { }
   }, [isMuted]);
+
+  // --- LEADERBOARD: Skoru sadece yüksekse Supabase'e kaydeder ---
+  const submitBestScore = useCallback(async (finalScore: number, finalLevel: number) => {
+    if (!address || finalScore <= 0) return;
+    try {
+      const { error } = await supabase.rpc("upsert_best_score", {
+        p_wallet: address,
+        p_score: finalScore,
+        p_level: finalLevel,
+      });
+      if (error) console.error("Leaderboard kayıt hatası:", error);
+    } catch (e) {
+      console.error("Leaderboard kayıt hatası:", e);
+    }
+  }, [address]);
+
+  // --- LEADERBOARD: İlk 10 skoru çeker ---
+  const fetchLeaderboard = useCallback(async () => {
+    setLeaderboardLoading(true);
+    try {
+      const { data, error } = await supabase
+        .from("leaderboard")
+        .select("wallet_address, best_score, best_level")
+        .order("best_score", { ascending: false })
+        .limit(10);
+      if (error) {
+        console.error("Leaderboard çekme hatası:", error);
+        setLeaderboardRows([]);
+      } else {
+        setLeaderboardRows(data || []);
+      }
+    } catch (e) {
+      console.error("Leaderboard çekme hatası:", e);
+      setLeaderboardRows([]);
+    } finally {
+      setLeaderboardLoading(false);
+    }
+  }, []);
+
+  const openLeaderboard = () => {
+    setIsLeaderboardOpen(true);
+    fetchLeaderboard();
+  };
 
   // --- NEON TUĞLA RENK PALETİ (görseldeki gibi) ---
   const NEON_PALETTE = [
@@ -256,7 +304,12 @@ export default function BrickBreakerMiniApp() {
       }
       if (ballYRef.current > FIXED_HEIGHT) {
         playAudio("lose"); const nextLives = livesRef.current - 1; setLives(nextLives);
-        if (nextLives <= 0) setGameState("gameover"); else resetBall();
+        if (nextLives <= 0) {
+          setGameState("gameover");
+          submitBestScore(scoreRef.current, levelRef.current);
+        } else {
+          resetBall();
+        }
       }
 
       bricksRef.current.forEach((b) => {
@@ -481,9 +534,10 @@ export default function BrickBreakerMiniApp() {
     ]);
   };
 
-  // Her oyuncunun kendi cüzdan adresinden türetilen sabit bir referans kodu
+  // Her oyuncunun kendi cüzdan adresinden türetilen sabit bir referans kodu (linke eklenir, metinde gösterilmez)
   const referralCode = address ? address.slice(2, 8).toUpperCase() : "MISAFIR";
-  const getShareText = () => `Base Brick Breaker'da ${score} puan topladım! 🚀 Referans kodum: ${referralCode}`;
+  const getShareText = () =>
+    `Base Brick Breaker'da ${level}. seviyeye ulaşıp ${score} puanla çıtayı buraya koydum.\nAranızda bu skoru geçebilecek bir "Brick Master" var mı? Yoksa bu rekoru kimse kıramaz mı? Hodri meydan! 🔥`;
   const getReferralLink = () => {
     if (typeof window === "undefined") return "";
     const url = new URL(window.location.href);
@@ -632,9 +686,12 @@ export default function BrickBreakerMiniApp() {
       </div>
 
       {/* BUTON GRUBU */}
-      <div className="grid grid-cols-2 gap-2 text-[11px]">
+      <div className="grid grid-cols-3 gap-2 text-[10px]">
         <button onClick={() => setGameMode(m => m === "tournament" ? "practice" : "tournament")} className="py-2 bg-slate-800 border border-slate-700 font-bold rounded-lg text-slate-300 text-center">
           {gameMode === "tournament" ? "🏆 Tournament" : "🕹️ Practice"}
+        </button>
+        <button onClick={openLeaderboard} className="py-2 bg-amber-600 font-bold rounded-lg text-center text-white shadow-sm">
+          📊 Sıralama
         </button>
         {/* Yenilenmiş Paylaşım: Farcaster veya X seçimi sunan açılır menü */}
         <div className="relative">
@@ -653,6 +710,51 @@ export default function BrickBreakerMiniApp() {
           )}
         </div>
       </div>
+
+      {/* LEADERBOARD MODALI */}
+      {isLeaderboardOpen && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={() => setIsLeaderboardOpen(false)}>
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl p-4 w-full max-w-sm max-h-[80vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+            <div className="flex justify-between items-center mb-3">
+              <h3 className="text-sm font-black text-amber-400 tracking-wide">🏆 En İyi 10 Skor</h3>
+              <button onClick={() => setIsLeaderboardOpen(false)} className="text-slate-400 hover:text-white text-lg leading-none">✕</button>
+            </div>
+            {leaderboardLoading ? (
+              <p className="text-[11px] text-slate-400 text-center py-6">Yükleniyor...</p>
+            ) : leaderboardRows.length === 0 ? (
+              <p className="text-[11px] text-slate-400 text-center py-6">Henüz kayıtlı skor yok. İlk skoru sen koy!</p>
+            ) : (
+              <div className="space-y-1.5">
+                {leaderboardRows.map((row, idx) => {
+                  const isMe = address && row.wallet_address?.toLowerCase() === address.toLowerCase();
+                  const medal = idx === 0 ? "🥇" : idx === 1 ? "🥈" : idx === 2 ? "🥉" : `${idx + 1}.`;
+                  return (
+                    <div
+                      key={row.wallet_address}
+                      className={`flex items-center justify-between px-3 py-2 rounded-lg text-[11px] ${
+                        isMe ? "bg-blue-600/20 border border-blue-500/40" : "bg-slate-800/60"
+                      }`}
+                    >
+                      <div className="flex items-center gap-2">
+                        <span className="font-bold text-amber-400 w-6 text-center">{medal}</span>
+                        <span className="font-mono text-slate-300">
+                          {row.wallet_address.slice(0, 6)}...{row.wallet_address.slice(-4)}
+                          {isMe && <span className="text-blue-400 font-bold ml-1">(Sen)</span>}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2 text-right">
+                        <span className="text-slate-500">LV {row.best_level}</span>
+                        <span className="font-bold text-emerald-400">{row.best_score}</span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
+
   );
 }
