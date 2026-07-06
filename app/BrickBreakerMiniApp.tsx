@@ -7,6 +7,9 @@ import { createClient } from "@supabase/supabase-js";
 import { useAccount, useConnect, useDisconnect, useSendTransaction } from "wagmi";
 import { parseEther } from "viem";
 
+// ==========================================
+// 1. CONFIGURATIONS & CONSTANTS
+// ==========================================
 const GAME_FEE_RECIPIENT = "0xBe96fB12585Bd1cd2822Ae451A69eA5E8970806F";
 const GAME_FEE_AMOUNT = parseEther("0.00001");
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
@@ -26,23 +29,30 @@ const ROW_COLORS = [
 ];
 
 export default function BrickBreakerMiniApp() {
+  // Web3 & Wallet Hooks
   const { address, isConnected } = useAccount();
   const { connect, connectors } = useConnect();
   const { disconnect } = useDisconnect();
   const { sendTransactionAsync } = useSendTransaction();
+
+  // Canvas & Audio Refs
   const canvasRef = useRef(null);
   const bgCanvasRef = useRef(null);
   const bgMusicRef = useRef(null);
 
+  // Core Game States
+  const [gameState, setGameState] = useState("menu");
   const [isPaying, setIsPaying] = useState(false);
   const [paymentError, setPaymentError] = useState(null);
+  const [showConfirmOverlay, setShowConfirmOverlay] = useState(false);
   const [score, setScore] = useState(0);
   const [level, setLevel] = useState(1);
   const [lives, setLives] = useState(4);
-  const [gameState, setGameState] = useState("menu");
   const [isPaused, setIsPaused] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
   const [gameMode, setGameMode] = useState("tournament");
+  
+  // Progression & Social States
   const [playerLv, setPlayerLv] = useState(1);
   const [playerXp, setPlayerXp] = useState(0);
   const [xpGained, setXpGained] = useState(0);
@@ -55,9 +65,11 @@ export default function BrickBreakerMiniApp() {
   const [combo, setCombo] = useState(0);
   const [showCombo, setShowCombo] = useState(false);
   const [isNewHigh, setIsNewHigh] = useState(false);
-  const [puCounts, setPuCounts] = useState({ WIDE: 0, LASER: 0, LIFE: 0, MULTI: 0, FREEZE: 0 });
+  const [puCounts, setPuCounts] = useState({ WIDE: 0, FIRE: 0, LIFE: 0, FREEZE: 0 });
   const [prevState, setPrevState] = useState("menu");
+  const [notification, setNotification] = useState(null);
 
+  // Gameplay Engineering Engine Refs
   const scoreRef = useRef(0);
   const levelRef = useRef(1);
   const livesRef = useRef(4);
@@ -77,17 +89,53 @@ export default function BrickBreakerMiniApp() {
   const ptcRef = useRef([]);
   const comboRef = useRef(0);
   const bestRef = useRef(0);
+  const notificationTimeoutRef = useRef(null);
 
+  // Sync state variables to refs to prevent requestAnimationFrame scope closures
   useEffect(() => { scoreRef.current = score; }, [score]);
   useEffect(() => { levelRef.current = level; }, [level]);
   useEffect(() => { livesRef.current = lives; }, [lives]);
   useEffect(() => { gsRef.current = gameState; }, [gameState]);
   useEffect(() => { pausedRef.current = isPaused; }, [isPaused]);
   useEffect(() => { bestRef.current = bestScore; }, [bestScore]);
-  useEffect(() => { const req = playerLv * 100; if (playerXp >= req) { setPlayerLv(l => l + 1); setPlayerXp(x => x - req); } }, [playerXp, playerLv]);
-  useEffect(() => { const init = async () => { try { const { sdk } = await import("@farcaster/miniapp-sdk"); if (sdk) { await sdk.actions.init(); setIsSdkLoaded(true); await sdk.actions.ready(); } } catch (e) { setIsSdkLoaded(true); } }; init(); }, []);
 
-  // Arka plan müziği (Menüde çalması için optimize edildi)
+  // Level Up Progression Calculator
+  useEffect(() => {
+    const req = playerLv * 100;
+    if (playerXp >= req) {
+      setPlayerLv(l => l + 1);
+      setPlayerXp(x => x - req);
+      triggerNotification("GLOBAL LEVEL INCREASED! ⚡");
+    }
+  }, [playerXp, playerLv]);
+
+  // Farcaster SDK Initialization Safeguard
+  useEffect(() => {
+    const init = async () => {
+      try {
+        const { sdk } = await import("@farcaster/miniapp-sdk");
+        if (sdk) {
+          await sdk.actions.init();
+          setIsSdkLoaded(true);
+          await sdk.actions.ready();
+        }
+      } catch (e) {
+        setIsSdkLoaded(true);
+      }
+    };
+    init();
+  }, []);
+
+  // Self-Expiring Top-Bar HUD Notification Trigger
+  const triggerNotification = (msg) => {
+    if (notificationTimeoutRef.current) clearTimeout(notificationTimeoutRef.current);
+    setNotification(msg);
+    notificationTimeoutRef.current = setTimeout(() => {
+      setNotification(null);
+    }, 2000);
+  };
+
+  // Ambient Pad Background Music Generator
   const startBgMusic = useCallback(() => {
     if (isMuted) return;
     try {
@@ -96,20 +144,28 @@ export default function BrickBreakerMiniApp() {
       if (!A) return;
       const ctx = new A();
       const master = ctx.createGain();
-      master.gain.setValueAtTime(0.05, ctx.currentTime);
+      master.gain.setValueAtTime(0.04, ctx.currentTime);
       master.connect(ctx.destination);
+
       const freqs = [110, 138.6, 165, 220];
       const oscs = freqs.map((f, i) => {
         const o = ctx.createOscillator();
         const g = ctx.createGain();
         o.type = i % 2 === 0 ? "sine" : "triangle";
         o.frequency.setValueAtTime(f, ctx.currentTime);
-        g.gain.setValueAtTime(0.018 + i * 0.004, ctx.currentTime);
+        g.gain.setValueAtTime(0.015 + i * 0.005, ctx.currentTime);
         o.connect(g); g.connect(master);
         o.start();
         return o;
       });
-      bgMusicRef.current = { ctx, oscs, master, stop: () => { oscs.forEach(o => { try { o.stop(); } catch(e) {} }); try { ctx.close(); } catch(e) {} bgMusicRef.current = null; } };
+      bgMusicRef.current = {
+        ctx, oscs, master,
+        stop: () => {
+          oscs.forEach(o => { try { o.stop(); } catch(e) {} });
+          try { ctx.close(); } catch(e) {}
+          bgMusicRef.current = null;
+        }
+      };
     } catch (e) {}
   }, [isMuted]);
 
@@ -119,21 +175,22 @@ export default function BrickBreakerMiniApp() {
     if (gameState === "menu" && !isMuted) startBgMusic();
     else stopBgMusic();
     return () => { if (gameState !== "menu") stopBgMusic(); };
-  }, [gameState, isMuted]);
+  }, [gameState, isMuted, startBgMusic, stopBgMusic]);
 
-  // Ses efektleri - Tuğla kırılma sesi yükseltildi
+  // Audio Synthesizer Engine
   const audio = useCallback((t) => {
     if (isMuted) return;
     try {
       const A = window.AudioContext || window.webkitAudioContext; if (!A) return;
       const c = new A(), o = c.createOscillator(), g = c.createGain();
       o.connect(g); g.connect(c.destination);
-      
-      // brick ses seviyesi 0.22'den 0.65'e yükseltildi ve daha dolgun hale getirildi
-      const cfg = { hit: [200, 0.15, 0.07], brick: [440, 0.65, 0.12], lose: [90, 0.25, 0.45], powerup: [560, 0.25, 0.18], levelup: [750, 0.25, 0.4] };
+      const cfg = { hit: [200, 0.12, 0.07], brick: [420, 0.22, 0.09], lose: [90, 0.18, 0.45], powerup: [560, 0.20, 0.18], levelup: [750, 0.18, 0.4] };
       const [freq, vol, dur] = cfg[t] || [300, 0.1, 0.1];
       o.frequency.setValueAtTime(freq, c.currentTime);
-      if (t === "brick") { o.type = "square"; o.frequency.setValueAtTime(freq, c.currentTime); o.frequency.exponentialRampToValueAtTime(freq * 0.45, c.currentTime + dur); }
+      if (t === "brick") {
+        o.type = "square";
+        o.frequency.exponentialRampToValueAtTime(freq * 0.5, c.currentTime + dur);
+      }
       g.gain.setValueAtTime(vol, c.currentTime); g.gain.exponentialRampToValueAtTime(0.001, c.currentTime + dur);
       o.start(); o.stop(c.currentTime + dur);
     } catch (e) {}
@@ -147,24 +204,54 @@ export default function BrickBreakerMiniApp() {
 
   const fetchLB = useCallback(async () => {
     setLeaderboardLoading(true);
-    try { const { data } = await supabase.from("leaderboard").select("wallet_address, best_score, best_level").order("best_score", { ascending: false }).limit(10); setLeaderboardRows(data || []); } catch (e) { setLeaderboardRows([]); } finally { setLeaderboardLoading(false); }
+    try {
+      const { data } = await supabase.from("leaderboard").select("wallet_address, best_score, best_level").order("best_score", { ascending: false }).limit(10);
+      setLeaderboardRows(data || []);
+    } catch (e) {
+      setLeaderboardRows([]);
+    } finally {
+      setLeaderboardLoading(false);
+    }
   }, []);
 
   const spawnPtc = (bx, by, bw, bh, color) => {
-    for (let i = 0; i < 8; i++) ptcRef.current.push({ x: bx + bw / 2 + (Math.random() - 0.5) * bw * 0.7, y: by + bh / 2 + (Math.random() - 0.5) * bh, vx: (Math.random() - 0.5) * 5, vy: (Math.random() - 0.5) * 5 - 1.5, life: 1, decay: 0.05 + Math.random() * 0.05, size: 2.5 + Math.random() * 4, color });
+    for (let i = 0; i < 8; i++) {
+      ptcRef.current.push({
+        x: bx + bw / 2 + (Math.random() - 0.5) * bw * 0.7,
+        y: by + bh / 2 + (Math.random() - 0.5) * bh,
+        vx: (Math.random() - 0.5) * 5,
+        vy: (Math.random() - 0.5) * 5 - 1.5,
+        life: 1,
+        decay: 0.05 + Math.random() * 0.05,
+        size: 2.5 + Math.random() * 4,
+        color
+      });
+    }
   };
 
   const genBricks = (lv = 1) => {
     const rows = 5 + Math.floor((lv - 1) / 5), cols = 7, pad = 5, oTop = 14, oLeft = 7;
     const bw = (W - oLeft * 2 - pad * (cols - 1)) / cols, bh = 18;
     const arr = [];
-    for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) arr.push({ x: c * (bw + pad) + oLeft, y: r * (bh + pad) + oTop, width: bw, height: bh, status: 1, rc: ROW_COLORS[r % ROW_COLORS.length], pu: null });
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        arr.push({ x: c * (bw + pad) + oLeft, y: r * (bh + pad) + oTop, width: bw, height: bh, status: 1, rc: ROW_COLORS[r % ROW_COLORS.length], pu: null });
+      }
+    }
     const shuf = arr.map((_, i) => i);
-    for (let i = shuf.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [shuf[i], shuf[j]] = [shuf[j], shuf[i]]; }
+    for (let i = shuf.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [shuf[i], shuf[j]] = [shuf[j], shuf[i]];
+    }
     let cnt = 0, cur = 0;
     if (lv % 3 === 0) { arr[shuf[cur++]].pu = "LIFE"; cnt++; }
-    const types = ["FREEZE", "LASER", "WIDE"];
-    for (; cur < shuf.length && cnt < 5; cur++) if (Math.random() < 0.14) { arr[shuf[cur]].pu = types[Math.floor(Math.random() * 3)]; cnt++; }
+    const types = ["FREEZE", "FIRE", "WIDE"];
+    for (; cur < shuf.length && cnt < 5; cur++) {
+      if (Math.random() < 0.14) {
+        arr[shuf[cur]].pu = types[Math.floor(Math.random() * 3)];
+        cnt++;
+      }
+    }
     bricksRef.current = arr;
   };
 
@@ -175,19 +262,27 @@ export default function BrickBreakerMiniApp() {
     vxRef.current = Math.random() > 0.5 ? sp : -sp; vyRef.current = -sp; trailRef.current = [];
   };
 
-  const startGame = async () => {
-    if (!isConnected) { alert("Please connect your wallet first!"); return; }
+  const verifyAndStartMatch = async () => {
+    if (!isConnected) { triggerNotification("CONNECT YOUR WALLET FIRST! 🔌"); return; }
     setPaymentError(null);
     if (gameMode === "tournament") {
       setIsPaying(true);
-      try { await sendTransactionAsync({ to: GAME_FEE_RECIPIENT, value: GAME_FEE_AMOUNT }); } catch { setPaymentError("Payment rejected."); setIsPaying(false); return; }
+      try {
+        await sendTransactionAsync({ to: GAME_FEE_RECIPIENT, value: GAME_FEE_AMOUNT });
+      } catch {
+        setPaymentError("Payment rejected.");
+        setIsPaying(false);
+        return;
+      }
       setIsPaying(false);
     }
+    setShowConfirmOverlay(false);
     setScore(0); setLevel(1); setLives(4); setXpGained(0); setCombo(0); setIsNewHigh(false); setIsPaused(false);
-    setPuCounts({ WIDE: 0, LASER: 0, LIFE: 0, MULTI: 0, FREEZE: 0 }); setActivePowerUp(null);
+    setPuCounts({ WIDE: 0, FIRE: 0, LIFE: 0, FREEZE: 0 }); setActivePowerUp(null);
     pwRef.current = PW; puRef.current = []; frozenRef.current = false; fireRef.current = false;
     trailRef.current = []; ptcRef.current = []; comboRef.current = 0; pausedRef.current = false;
     pxRef.current = (W - PW) / 2; genBricks(1); resetBall(1); setGameState("playing");
+    triggerNotification("MATCH LAUNCHED SECURELY 🕹️");
   };
 
   const checkVic = () => {
@@ -202,13 +297,13 @@ export default function BrickBreakerMiniApp() {
     genBricks(levelRef.current); resetBall(levelRef.current);
     setActivePowerUp(null); puRef.current = []; frozenRef.current = false; fireRef.current = false;
     ptcRef.current = []; comboRef.current = 0; setCombo(0); setIsPaused(false); pausedRef.current = false;
-    setPuCounts({ WIDE: 0, LASER: 0, LIFE: 0, MULTI: 0, FREEZE: 0 }); setGameState("playing");
+    setPuCounts({ WIDE: 0, FIRE: 0, LIFE: 0, FREEZE: 0 }); setGameState("playing");
   };
 
   const openLB = () => { setPrevState(gameState); setGameState("leaderboard"); fetchLB(); };
   const avatarColor = (w) => { const cs = ["#ff2d78","#ff6000","#ffd000","#00c853","#00bcd4","#7c4dff"]; let h = 0; for (let i = 0; i < w.length; i++) h = w.charCodeAt(i) + ((h << 5) - h); return cs[Math.abs(h) % cs.length]; };
 
-  // Menü arka plan animasyonu (05.webp fütüristik çizgiler ve parıltılar)
+  // Menu Ambient Animation Engine
   useEffect(() => {
     if (gameState !== "menu") return;
     const cv = bgCanvasRef.current; if (!cv) return;
@@ -248,7 +343,7 @@ export default function BrickBreakerMiniApp() {
     return () => cancelAnimationFrame(aid);
   }, [gameState]);
 
-  // Ana oyun döngüsü
+  // Main Canvas Physics Engine Loop
   useEffect(() => {
     let aid;
     const drawBrick = (ctx, b) => {
@@ -261,12 +356,14 @@ export default function BrickBreakerMiniApp() {
       g.addColorStop(0, rc.top); g.addColorStop(0.5, rc.mid); g.addColorStop(1, rc.bot);
       ctx.fillStyle = g; ctx.beginPath(); ctx.roundRect(x, y, bw, bh, r); ctx.fill();
       ctx.shadowColor = "transparent"; ctx.shadowBlur = 0; ctx.shadowOffsetX = 0; ctx.shadowOffsetY = 0;
+      
       const sg = ctx.createLinearGradient(x, y, x, y + bh * 0.5);
       sg.addColorStop(0, rc.shine); sg.addColorStop(1, "rgba(255,255,255,0)");
       ctx.fillStyle = sg; ctx.beginPath(); ctx.roundRect(x + 2, y + 2, bw - 4, bh * 0.48, [r - 1, r - 1, 2, 2]); ctx.fill();
+      
       ctx.fillStyle = "rgba(255,255,255,0.15)";
       ctx.beginPath(); ctx.roundRect(x + 1, y + 2, 2, bh - 4, 1); ctx.fill();
-      if (b.pu) { const icons = { LIFE: "♥", FREEZE: "❄", LASER: "⚡", WIDE: "↔" }; ctx.font = `bold ${Math.floor(bh * 0.52)}px sans-serif`; ctx.fillStyle = "rgba(255,255,255,0.95)"; ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText(icons[b.pu] || "?", x + bw / 2, y + bh / 2 + 1); }
+      if (b.pu) { const icons = { LIFE: "♥", FREEZE: "❄", FIRE: "🔥", WIDE: "↔" }; ctx.font = `bold ${Math.floor(bh * 0.52)}px sans-serif`; ctx.fillStyle = "rgba(255,255,255,0.95)"; ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText(icons[b.pu] || "?", x + bw / 2, y + bh / 2 + 1); }
       ctx.restore();
     };
 
@@ -302,11 +399,11 @@ export default function BrickBreakerMiniApp() {
       puRef.current.forEach((p, i) => {
         p.y += 1.5;
         if (p.y >= H - PH - 12 && p.y <= H && p.x >= pxRef.current && p.x <= pxRef.current + pwRef.current) {
-          audio("powerup");
-          if (p.type === "WIDE") { pwRef.current = PW * 1.5; setPuCounts(prev => ({ ...prev, WIDE: prev.WIDE + 1 })); setActivePowerUp("EXPAND"); setTimeout(() => { pwRef.current = PW; setActivePowerUp(null); }, 6000); }
-          else if (p.type === "LIFE") { setLives(l => Math.min(l + 1, 6)); setPuCounts(prev => ({ ...prev, LIFE: prev.LIFE + 1 })); }
-          else if (p.type === "FREEZE" && !frozenRef.current) { frozenRef.current = true; vxRef.current *= 0.5; vyRef.current *= 0.5; setPuCounts(prev => ({ ...prev, FREEZE: prev.FREEZE + 1 })); setActivePowerUp("SLOW BALL"); setTimeout(() => { frozenRef.current = false; vxRef.current *= 2; vyRef.current *= 2; setActivePowerUp(null); }, 6000); }
-          else if (p.type === "LASER") { setPuCounts(prev => ({ ...prev, LASER: prev.LASER + 1 })); setActivePowerUp("LASER ACTIVE"); }
+          audio("powerup"); setPuCounts(prev => ({ ...prev, [p.type]: (prev[p.type] || 0) + 1 }));
+          if (p.type === "WIDE") { pwRef.current = PW * 1.5; setActivePowerUp("EXPAND"); setTimeout(() => { pwRef.current = PW; setActivePowerUp(null); }, 6000); triggerNotification("PADDLE EXPANDED"); }
+          else if (p.type === "LIFE") { setLives(l => Math.min(l + 1, 6)); triggerNotification("EXTRA LIFE ACQUIRED"); }
+          else if (p.type === "FREEZE" && !frozenRef.current) { frozenRef.current = true; vxRef.current *= 0.5; vyRef.current *= 0.5; setActivePowerUp("SLOW BALL"); setTimeout(() => { frozenRef.current = false; vxRef.current *= 2; vyRef.current *= 2; setActivePowerUp(null); }, 6000); triggerNotification("TEMPORARY MATRIX SLOWDOWN"); }
+          else if (p.type === "FIRE") { fireRef.current = true; setActivePowerUp("FIRE BALL"); setTimeout(() => { fireRef.current = false; setActivePowerUp(null); }, 6000); triggerNotification("EXPLOSIVE FIREBALL ACTIVE"); }
           puRef.current.splice(i, 1);
         } else if (p.y > H) puRef.current.splice(i, 1);
       });
@@ -316,18 +413,20 @@ export default function BrickBreakerMiniApp() {
       const cv = canvasRef.current; if (!cv) return;
       const ctx = cv.getContext("2d"); if (!ctx) return;
       ctx.clearRect(0, 0, W, H);
+      
       const bg = ctx.createLinearGradient(0, 0, W, H);
       bg.addColorStop(0, "#06041a"); bg.addColorStop(0.5, "#0a0828"); bg.addColorStop(1, "#06041a");
       ctx.fillStyle = bg; ctx.fillRect(0, 0, W, H);
+      
       ctx.save(); for (let i = 0; i < 45; i++) { ctx.fillStyle = `rgba(255,255,255,${0.04 + (i % 5) * 0.025})`; ctx.beginPath(); ctx.arc((i * 97 + 30) % W, (i * 71 + 15) % H, i % 5 === 0 ? 1.3 : 0.7, 0, Math.PI * 2); ctx.fill(); } ctx.restore();
       ctx.save(); ctx.strokeStyle = "rgba(120,60,255,0.35)"; ctx.lineWidth = 2; ctx.shadowColor = "#8040ff"; ctx.shadowBlur = 12; ctx.strokeRect(2, 2, W - 4, H - 4); ctx.restore();
       bricksRef.current.forEach(b => drawBrick(ctx, b));
       ptcRef.current.forEach(p => { ctx.save(); ctx.globalAlpha = Math.max(0, p.life); ctx.fillStyle = p.color; ctx.shadowColor = p.color; ctx.shadowBlur = 7; ctx.beginPath(); ctx.roundRect(p.x - p.size / 2, p.y - p.size / 2, p.size, p.size, 2); ctx.fill(); ctx.restore(); });
-      const pu_c = { WIDE: "#00d4ff", LIFE: "#ff3070", FREEZE: "#60c0ff", LASER: "#ff00a0" };
-      const pu_l = { WIDE: "↔", LIFE: "♥", FREEZE: "❄", LASER: "⚡" };
+      
+      const pu_c = { WIDE: "#00d4ff", LIFE: "#ff3070", FREEZE: "#60c0ff", FIRE: "#ff8800" };
+      const pu_l = { WIDE: "E", LIFE: "♥", FREEZE: "❄", FIRE: "F" };
       puRef.current.forEach(p => { const pc = pu_c[p.type] || "#fff"; ctx.save(); ctx.shadowColor = pc; ctx.shadowBlur = 16; ctx.strokeStyle = pc; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(p.x, p.y, 12, 0, Math.PI * 2); ctx.stroke(); ctx.fillStyle = pc + "38"; ctx.beginPath(); ctx.arc(p.x, p.y, 10, 0, Math.PI * 2); ctx.fill(); ctx.shadowBlur = 0; ctx.fillStyle = "#fff"; ctx.font = "bold 9px sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText(pu_l[p.type] || "?", p.x, p.y + 0.5); ctx.restore(); });
       
-      // Pedal (03.webp siber tasarım cap kaplamalarıyla birlikte)
       const py = H - PH - 5;
       ctx.save(); ctx.shadowColor = "#6060ff"; ctx.shadowBlur = 32;
       const pg = ctx.createLinearGradient(pxRef.current, py, pxRef.current, py + PH);
@@ -339,16 +438,17 @@ export default function BrickBreakerMiniApp() {
       ctx.fillStyle = padShine; ctx.beginPath(); ctx.roundRect(pxRef.current + 4, py + 2.5, pwRef.current - 8, 2.5, 2); ctx.fill();
       ctx.restore();
       
-      // Top & Parlayan Neon İz (03.webp'deki gibi mor-pembe gradyanlı iz)
       let bc = "#ff3070", bg2 = "#ff1050"; if (fireRef.current) { bc = "#ff9000"; bg2 = "#ff6000"; } else if (frozenRef.current) { bc = "#70d0ff"; bg2 = "#40b0ff"; }
-      trailRef.current.forEach((t, i) => { ctx.save(); ctx.globalAlpha = (i / trailRef.current.length) * 0.45; ctx.fillStyle = "#e060ff"; ctx.beginPath(); ctx.arc(t.x, t.y, BR * (0.4 + i / trailRef.current.length * 0.6), 0, Math.PI * 2); ctx.fill(); ctx.restore(); });
-      ctx.save(); ctx.shadowColor = "#ff3070"; ctx.shadowBlur = 24;
+      trailRef.current.forEach((t, i) => { ctx.save(); ctx.globalAlpha = (i / trailRef.current.length) * 0.5; ctx.fillStyle = bc; ctx.beginPath(); ctx.arc(t.x, t.y, BR * (0.3 + i / trailRef.current.length * 0.7), 0, Math.PI * 2); ctx.fill(); ctx.restore(); });
+      ctx.save(); ctx.shadowColor = bg2; ctx.shadowBlur = 32;
       const bgr = ctx.createRadialGradient(bxRef.current - 2.5, byRef.current - 2.5, 1, bxRef.current, byRef.current, BR);
-      bgr.addColorStop(0, "#ffffff"); bgr.addColorStop(0.4, bc); bgr.addColorStop(1, bg2);
-      ctx.fillStyle = bgr; ctx.beginPath(); ctx.arc(bxRef.current, byRef.current, BR, 0, Math.PI * 2); ctx.fill(); ctx.restore();
+      bgr.addColorStop(0, "#fff"); bgr.addColorStop(0.35, bc); bgr.addColorStop(1, bg2);
+      ctx.fillStyle = bgr; ctx.beginPath(); ctx.arc(bxRef.current, byRef.current, BR, 0, Math.PI * 2); ctx.fill();
+      if (fireRef.current || frozenRef.current) { ctx.strokeStyle = fireRef.current ? "rgba(255,160,0,0.7)" : "rgba(96,210,255,0.7)"; ctx.lineWidth = 2.5; ctx.beginPath(); ctx.arc(bxRef.current, byRef.current, BR + 4, 0, Math.PI * 2); ctx.stroke(); }
+      ctx.restore();
       
       if (pausedRef.current) {
-        ctx.save(); ctx.fillStyle = "rgba(0,0,0,0.65)"; ctx.fillRect(0, 0, W, H);
+        ctx.save(); ctx.fillStyle = "rgba(0,0,0,0.6)"; ctx.fillRect(0, 0, W, H);
         ctx.fillStyle = "#fff"; ctx.font = "bold 28px sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
         ctx.shadowColor = "#8040ff"; ctx.shadowBlur = 20;
         ctx.fillText("⏸  PAUSED", W / 2, H / 2 - 15);
@@ -363,17 +463,21 @@ export default function BrickBreakerMiniApp() {
     return () => cancelAnimationFrame(aid);
   }, [gameState, audio, level, isPaused]);
 
+  // Input Handlers
   const onMove = (e) => { if (gsRef.current !== "playing" || !canvasRef.current || pausedRef.current) return; const r = canvasRef.current.getBoundingClientRect(); const cx = (e.clientX - r.left) * (W / r.width); pxRef.current = Math.max(0, Math.min(W - pwRef.current, cx - pwRef.current / 2)); };
   const onTouch = (e) => { if (gsRef.current !== "playing" || !canvasRef.current || !e.touches.length || pausedRef.current) return; if (e.cancelable) e.preventDefault(); const r = canvasRef.current.getBoundingClientRect(); const cx = (e.touches[0].clientX - r.left) * (W / r.width); pxRef.current = Math.max(0, Math.min(W - pwRef.current, cx - pwRef.current / 2)); };
-  const wt = (p, ms) => Promise.race([p, new Promise((_, r) => setTimeout(() => r(new Error("t"))))]);
+  
+  // Social Configurations
+  const wt = (p, ms) => Promise.race([p, new Promise((_, r) => setTimeout(() => r(new Error("t")), ms))]);
   const refCode = address ? address.slice(2, 8).toUpperCase() : "GUEST";
   const shareTxt = () => `Base Brick Breaker'da ${level}. seviyeye ulaşıp ${score} puanla çıtayı buraya koydum.\nAranızda bu skoru geçebilecek bir "Brick Master" var mı? Hodri meydan! 🔥`;
   const refLink = () => { if (typeof window === "undefined") return ""; const u = new URL(window.location.href); u.searchParams.set("ref", refCode); return u.toString(); };
-  const fallback = async () => { try { if (navigator.share) await navigator.share({ text: shareTxt(), url: refLink() }); else { await navigator.clipboard.writeText(`${shareTxt()} ${refLink()}`); alert("Copied!"); } } catch (e) {} };
+  
+  const fallback = async () => { try { if (navigator.share) await navigator.share({ text: shareTxt(), url: refLink() }); else { await navigator.clipboard.writeText(`${shareTxt()} ${refLink()}`); triggerNotification("COPIED TO CLIPBOARD! 📋"); } } catch (e) {} };
   const shareFarcaster = async () => { setShareMenuOpen(false); try { const { sdk } = await import("@farcaster/miniapp-sdk"); const inApp = await wt(sdk.isInMiniApp(), 1000).catch(() => false); if (!inApp) { await fallback(); return; } await wt(sdk.actions.composeCast({ text: shareTxt(), embeds: [refLink()] }), 2000); } catch (e) { await fallback(); } };
   const shareX = async () => { setShareMenuOpen(false); const xu = `https://twitter.com/intent/tweet?text=${encodeURIComponent(shareTxt())}&url=${encodeURIComponent(refLink())}`; try { const { sdk } = await import("@farcaster/miniapp-sdk"); const inApp = await wt(sdk.isInMiniApp(), 1000).catch(() => false); if (!inApp) { window.open(xu, "_blank"); return; } await wt(sdk.actions.openUrl(xu), 1500); } catch (e) { window.open(xu, "_blank"); } };
 
-  if (!isSdkLoaded) return <div style={{ background: "#06041a", color: "#fff", padding: 40, textAlign: "center", borderRadius: 16, minHeight: 200, display: "flex", alignItems: "center", justifyContent: "center" }}>Loading...</div>;
+  if (!isSdkLoaded) return <div style={{ background: "#06041a", color: "#fff", padding: 40, textAlign: "center", borderRadius: 16, minHeight: 200, display: "flex", alignItems: "center", justifyContext: "center" }}>Loading Framework Context...</div>;
 
   const ShareMenu = () => shareMenuOpen ? (
     <div style={{ position: "absolute", bottom: "110%", right: 0, background: "#14103a", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 12, overflow: "hidden", zIndex: 30, minWidth: 145 }}>
@@ -383,83 +487,124 @@ export default function BrickBreakerMiniApp() {
   ) : null;
 
   return (
-    <div style={{ background: "linear-gradient(160deg, #060418 0%, #0c0828 50%, #060418 100%)", borderRadius: 20, overflow: "hidden", maxWidth: 440, margin: "0 auto", fontFamily: "'Arial Black', Arial, sans-serif" }}>
+    <div style={{ background: "linear-gradient(160deg, #060418 0%, #0c0828 50%, #060418 100%)", borderRadius: 20, overflow: "hidden", maxWidth: 440, margin: "0 auto", fontFamily: "'Arial Black', Arial, sans-serif", position: "relative" }}>
 
-      {/* ===== ANA MENÜ (05.webp Görseliyle Birebir) ===== */}
+      {/* TOP FLOATING NOTIFICATION SYSTEM */}
+      {notification && (
+        <div style={{ position: "absolute", top: 65, left: "50%", transform: "translateX(-50%)", background: "rgba(6, 14, 32, 0.92)", border: "1px solid #00e5ff", color: "#00e5ff", fontSize: 10, fontWeight: "bold", padding: "6px 14px", borderRadius: 20, zIndex: 999, trackingWith: "wider", boxShadow: "0 0 15px rgba(0,229,255,0.35)", textAlign: "center", whiteSpace: "nowrap" }}>
+          {notification}
+        </div>
+      )}
+
+      {/* ===== STATE 1: MAIN MENU ===== */}
       {gameState === "menu" && (
         <div style={{ position: "relative", minHeight: 640, overflow: "hidden" }}>
           <canvas ref={bgCanvasRef} width={390} height={640} style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none" }} />
-          <div style={{ position: "relative", zIndex: 2, display: "flex", flexDirection: "column", alignItems: "center", padding: "18px 20px 24px", gap: 0 }}>
-            {/* Üst Bar */}
+          <div style={{ position: "relative", zIndex: 2, display: "flex", flexDirection: "column", alignItems: "center", padding: "18px 20px 20px", gap: 0 }}>
+            
+            {/* Header Module */}
             <div style={{ width: "100%", display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-              <button style={{ width: 38, height: 38, borderRadius: 10, background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)", color: "#fff", fontSize: 16, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>☰</button>
+              <button style={{ width: 38, height: 38, borderRadius: 10, background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.12)", color: "#fff", fontSize: 16, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>☰</button>
               <button onClick={() => isConnected ? disconnect() : (connectors[0] && connect({ connector: connectors[0] }))} style={{ padding: "7px 14px", borderRadius: 20, fontWeight: 700, fontSize: 11, cursor: "pointer", border: "1px solid rgba(0,220,200,0.4)", background: "rgba(0,220,200,0.12)", color: isConnected ? "#00dcc8" : "#80ffee" }}>
                 {isConnected ? `${address.slice(0, 4)}...${address.slice(-4)}` : "Connect Wallet"}
               </button>
             </div>
 
-            {/* Başlık (Neon Işıltılı) */}
-            <div style={{ textAlign: "center", marginBottom: 12 }}>
-              <div style={{ color: "#e0e0ff", fontWeight: 900, fontSize: 24, letterSpacing: 2, textShadow: "0 0 20px rgba(180,160,255,0.6)" }}>BASE BRICK</div>
-              <div style={{ fontWeight: 900, fontSize: 48, letterSpacing: 3, background: "linear-gradient(135deg, #ff80ff 0%, #c040ff 40%, #6040ff 100%)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", lineHeight: 1 }}>BREAKER</div>
-              <div style={{ color: "#8080c0", fontSize: 11, fontWeight: 700, letterSpacing: 3, marginTop: 4 }}>CLASSIC ARCADE EDITION</div>
+            {/* Typography Header Title */}
+            <div style={{ textAlign: "center", marginBottom: 8 }}>
+              <div style={{ color: "#e0e0ff", fontWeight: 900, fontSize: 22, letterSpacing: 2, textShadow: "0 0 20px rgba(180,160,255,0.6)" }}>BASE BRICK</div>
+              <div style={{ fontWeight: 900, fontSize: 44, letterSpacing: 3, background: "linear-gradient(135deg, #ff80ff 0%, #c040ff 40%, #6040ff 100%)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", lineHeight: 1 }}>BREAKER</div>
+              <div style={{ color: "#8080c0", fontSize: 10, fontWeight: 700, letterSpacing: 3, marginTop: 4 }}>CLASSIC ARCADE EDITION</div>
             </div>
 
-            {/* Orta İllüstrasyon (Top + Pedal + Efektler) */}
-            <div style={{ position: "relative", width: 260, height: 180, display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 24 }}>
+            {/* Main Interactive Visual Element */}
+            <div style={{ position: "relative", width: 260, height: 180, display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 16 }}>
               <div style={{ position: "absolute", bottom: 42, left: "50%", transform: "translateX(-50%)", width: 180, height: 30, background: "radial-gradient(ellipse, rgba(120,80,255,0.5) 0%, transparent 70%)", filter: "blur(8px)" }} />
               <div style={{ position: "absolute", bottom: 62, left: "50%", transform: "translateX(-50%)", width: 2, height: 100, background: "linear-gradient(180deg, rgba(150,100,255,0.8) 0%, transparent 100%)", boxShadow: "0 0 12px #8050ff" }} />
               <div style={{ position: "absolute", bottom: 62, left: "50%", transform: "translateX(-60%) rotate(-15deg)", width: 1.5, height: 80, background: "linear-gradient(180deg, rgba(100,200,255,0.5) 0%, transparent 100%)" }} />
               <div style={{ position: "absolute", bottom: 62, left: "50%", transform: "translateX(-40%) rotate(15deg)", width: 1.5, height: 80, background: "linear-gradient(180deg, rgba(100,200,255,0.5) 0%, transparent 100%)" }} />
-              <div style={{ position: "absolute", bottom: 120, left: "50%", transform: "translateX(-50%)", width: 52, height: 52, borderRadius: "50%", background: "radial-gradient(circle at 32% 28%, #ffffff, #d060ff 40%, #8030ff)", boxShadow: "0 0 30px #a050ff, 0 0 60px rgba(160,80,255,0.5)" }} />
-              <div style={{ position: "absolute", bottom: 40, left: "50%", transform: "translateX(-50%)", width: 130, height: 18, borderRadius: 9, background: "linear-gradient(90deg, #a0b8ff, #6080ff, #a0b8ff)", boxShadow: "0 0 25px #6080ff" }}>
+              <div style={{ position: "absolute", bottom: 120, left: "50%", transform: "translateX(-50%)", width: 52, height: 52, borderRadius: "50%", background: "radial-gradient(circle at 32% 28%, #ffffff, #d060ff 40%, #8030ff)", boxShadow: "0 0 30px #a050ff, 0 0 60px rgba(160,80,255,0.5), inset 0 -4px 10px rgba(0,0,0,0.3)" }} />
+              <div style={{ position: "absolute", bottom: 40, left: "50%", transform: "translateX(-50%)", width: 130, height: 18, borderRadius: 9, background: "linear-gradient(90deg, #a0b8ff, #6080ff, #a0b8ff)", boxShadow: "0 0 25px #6080ff, 0 0 50px rgba(96,128,255,0.4), 0 4px 12px rgba(0,0,0,0.4)" }}>
                 <div style={{ position: "absolute", top: 3, left: "15%", right: "15%", height: 3, borderRadius: 2, background: "rgba(255,255,255,0.6)" }} />
               </div>
             </div>
 
-            {/* PLAY NOW Butonu */}
-            <button onClick={startGame} disabled={isPaying} style={{ width: "100%", padding: "18px", borderRadius: 14, fontWeight: 900, fontSize: 19, letterSpacing: 2, cursor: isPaying ? "not-allowed" : "pointer", border: "none", background: "linear-gradient(135deg, #ff2060 0%, #cc2090 40%, #8020c0 100%)", color: "#fff", boxShadow: "0 0 30px rgba(200,40,150,0.6)", opacity: isPaying ? 0.65 : 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 10, marginBottom: 14 }}>
-              <span style={{ fontSize: 20 }}>▶</span>{isPaying ? "CONFIRMING..." : "PLAY NOW"}
+            {/* Game Mode Configuration Toggles */}
+            <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+              {["tournament", "practice"].map(m => (
+                <button key={m} onClick={() => setGameMode(m)} style={{ padding: "6px 14px", borderRadius: 8, fontSize: 10, fontWeight: 700, cursor: "pointer", border: `1px solid ${gameMode === m ? "rgba(120,80,255,0.6)" : "rgba(255,255,255,0.12)"}`, background: gameMode === m ? "rgba(120,80,255,0.22)" : "rgba(255,255,255,0.05)", color: gameMode === m ? "#c0a0ff" : "#606090" }}>
+                  {m === "tournament" ? "🏆 Tournament" : "🕹️ Practice"}
+                </button>
+              ))}
+            </div>
+            {gameMode === "tournament" && <div style={{ color: "#ff8040", fontSize: 9, fontWeight: 700, marginBottom: 10 }}>0.00001 ETH per game on Base</div>}
+
+            {/* PLAY ACTION BUTTON TRIGGER */}
+            <button onClick={() => setShowConfirmOverlay(true)} disabled={isPaying} style={{ width: "100%", padding: "17px", borderRadius: 16, fontWeight: 900, fontSize: 18, letterSpacing: 2, cursor: "pointer", border: "none", background: "linear-gradient(135deg, #ff2060 0%, #cc2090 40%, #8020c0 100%)", color: "#fff", boxShadow: "0 0 30px rgba(200,40,150,0.55), 0 4px 20px rgba(0,0,0,0.4)", display: "flex", alignItems: "center", justifyContent: "center", gap: 10, marginBottom: 12 }}>
+              <span style={{ fontSize: 20 }}>▶</span>PLAY NOW
             </button>
             {paymentError && <div style={{ color: "#ff5060", fontSize: 10, textAlign: "center", marginTop: -6, marginBottom: 6 }}>{paymentError}</div>}
 
-            {/* Alt Menü Buton Gridi (05.webp ile Aynı Düzen - Shop Ekranı Yok, Sadece Buton) */}
-            <div style={{ width: "100%", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
-              <button style={{ padding: "14px 8px", borderRadius: 12, fontWeight: 700, fontSize: 12, cursor: "pointer", border: "1px solid rgba(255,100,100,0.2)", background: "linear-gradient(180deg, rgba(60,20,30,0.6), rgba(40,10,15,0.8))", color: "#ff80a0", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
+            {/* Secondary Navigation Options Grid */}
+            <div style={{ width: "100%", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>
+              <button onClick={() => setGameMode("tournament")} style={{ padding: "13px 8px", borderRadius: 14, fontWeight: 700, fontSize: 12, cursor: "pointer", border: "1px solid rgba(200,140,40,0.4)", background: "rgba(180,120,20,0.18)", color: "#ffcc44", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
                 🏆 TOURNAMENT
               </button>
-              <button onClick={openLB} style={{ padding: "14px 8px", borderRadius: 12, fontWeight: 700, fontSize: 12, cursor: "pointer", border: "1px solid rgba(0,180,255,0.25)", background: "linear-gradient(180deg, rgba(10,40,80,0.6), rgba(5,20,50,0.8))", color: "#60c8ff", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
+              <button onClick={openLB} style={{ padding: "13px 8px", borderRadius: 14, fontWeight: 700, fontSize: 12, cursor: "pointer", border: "1px solid rgba(60,120,255,0.4)", background: "rgba(40,80,220,0.18)", color: "#6090ff", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
                 📊 LEADERBOARD
               </button>
             </div>
-            <div style={{ width: "100%", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-              <button style={{ padding: "14px 8px", borderRadius: 12, fontWeight: 700, fontSize: 12, cursor: "default", border: "1px solid rgba(200,100,255,0.15)", background: "linear-gradient(180deg, rgba(40,15,60,0.4), rgba(25,10,40,0.6))", color: "#c080ff", display: "flex", alignItems: "center", justifyContent: "center", gap: 8, opacity: 0.8 }}>
+            <div style={{ width: "100%", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+              <button style={{ padding: "13px 8px", borderRadius: 14, fontWeight: 700, fontSize: 12, cursor: "not-allowed", border: "1px solid rgba(255,255,255,0.1)", background: "rgba(255,255,255,0.05)", color: "#505070", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
                 🛒 SHOP
               </button>
-              <button onClick={() => setIsMuted(m => !m)} style={{ padding: "14px 8px", borderRadius: 12, fontWeight: 700, fontSize: 12, cursor: "pointer", border: "1px solid rgba(255,255,255,0.1)", background: "linear-gradient(180deg, rgba(30,35,60,0.6), rgba(15,20,40,0.8))", color: "#a0b0d0", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
-                ⚙️ SETTINGS
+              <button onClick={() => setIsMuted(m => !m)} style={{ padding: "13px 8px", borderRadius: 14, fontWeight: 700, fontSize: 12, cursor: "pointer", border: "1px solid rgba(255,255,255,0.12)", background: "rgba(255,255,255,0.06)", color: "#8090c0", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
+                {isMuted ? "🔇" : "⚙️"} SETTINGS
               </button>
             </div>
           </div>
+
+          {/* NATIVE INTEGRATED VERIFICATION CONFIRMATION OVERLAY */}
+          {showConfirmOverlay && (
+            <div style={{ position: "absolute", inset: 0, backgroundColor: "rgba(6, 8, 20, 0.96)", backdropFilter: "blur(8px)", zIndex: 999, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 20 }}>
+              <div style={{ backgroundColor: "#0f1326", border: "1px solid #262f59", padding: "30px 24px", borderRadius: 24, maxWidth: 320, width: "100%", textAlign: "center", boxShadow: "0 0 40px rgba(0,0,0,0.8)" }}>
+                <h3 style={{ fontSize: 18, fontWeight: 900, color: "#00e5ff", marginBottom: 8, letterSpacing: 1 }}>CONFIRM START</h3>
+                <p style={{ color: "#a0a5c0", fontSize: 11, marginBottom: 20, fontFamily: "sans-serif", lineHeight: "1.4" }}>
+                  You are opening a live secure transaction node session on the active network.
+                </p>
+                <div style={{ backgroundColor: "#161b36", padding: 10, borderRadius: 12, marginBottom: 24, border: "1px solid #222a4f", fontFamily: "monospace", fontSize: 10, color: "#10b981", wordBreak: "break-all" }}>
+                  Node Account: {isConnected ? address : "Not Connected"}
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                  <button onClick={verifyAndStartMatch} disabled={isPaying} style={{ width: "100%", padding: "12px", borderRadius: 12, border: "none", background: "linear-gradient(135deg, #10b981, #059669)", color: "#fff", fontWeight: "bold", fontSize: 12, letterSpacing: 1, cursor: "pointer" }}>
+                    {isPaying ? "PROCESSING..." : "CONFIRM & LAUNCH"}
+                  </button>
+                  <button onClick={() => setShowConfirmOverlay(false)} style={{ background: "none", border: "none", color: "#8085a0", fontSize: 11, cursor: "pointer", padding: "6px 0" }}>
+                    CANCEL
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
-      {/* ===== OYUN EKRANI (03.webp Tasarımı) ===== */}
+      {/* ===== STATE 2: ACTIVE GAME INTERFACE ===== */}
       {(gameState === "playing" || gameState === "gameover") && (
         <div style={{ display: "flex", flexDirection: "column" }}>
-          {/* Üst Alan */}
+          
+          {/* Header Metadata HUD */}
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 14px 8px", borderBottom: "1px solid rgba(255,255,255,0.07)" }}>
             <div>
               <div style={{ color: "#c0c0ff", fontWeight: 900, fontSize: 13, letterSpacing: 1.5 }}>BASE BRICK</div>
               <div style={{ fontWeight: 900, fontSize: 16, background: "linear-gradient(135deg, #ff80ff, #8040ff)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", letterSpacing: 1 }}>BREAKER</div>
-              <div style={{ color: "#504070", fontSize: 8, fontWeight: 700, letterSpacing: 2 }}>CLASSIC ARCADE EDITION</div>
             </div>
             <button onClick={() => isConnected ? disconnect() : (connectors[0] && connect({ connector: connectors[0] }))} style={{ padding: "5px 10px", borderRadius: 20, fontWeight: 700, fontSize: 11, cursor: "pointer", border: "1px solid rgba(0,220,200,0.35)", background: "rgba(0,220,200,0.1)", color: "#00dcc8" }}>
               {isConnected ? `${address.slice(0, 4)}...${address.slice(-4)}` : "Connect"}
             </button>
           </div>
 
-          {/* Skor Barı */}
+          {/* High Score Metrics Indicators Bar */}
           <div style={{ display: "flex", justifyContent: "space-around", alignItems: "center", padding: "8px 14px", background: "rgba(0,0,0,0.38)", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
             <div style={{ textAlign: "center" }}><div style={{ color: "#504070", fontSize: 9, fontWeight: 700, letterSpacing: 1.5 }}>SCORE</div><div style={{ color: "#00e5ff", fontWeight: 900, fontSize: 16 }}>{score.toLocaleString()}</div></div>
             <div style={{ width: 1, height: 28, background: "rgba(255,255,255,0.08)" }} />
@@ -468,51 +613,49 @@ export default function BrickBreakerMiniApp() {
             <div style={{ textAlign: "center" }}><div style={{ color: "#504070", fontSize: 9, fontWeight: 700, letterSpacing: 1.5 }}>LEVEL</div><div style={{ color: "#b060ff", fontWeight: 900, fontSize: 16 }}>{level}</div></div>
           </div>
 
-          {/* Oyun Alanı Canvas & Dahili Neon Butonlar (03.webp Yerleşimi) */}
+          {/* Active Interactive Canvas Viewport */}
           <div style={{ position: "relative" }}>
             <canvas ref={canvasRef} width={W} height={H} onPointerMove={onMove} onTouchMove={onTouch} onTouchStart={onTouch} style={{ width: "100%", display: "block", touchAction: "none", cursor: "crosshair" }} />
+            
+            {/* Combo Notification */}
             {showCombo && combo > 1 && <div style={{ position: "absolute", top: 10, left: "50%", transform: "translateX(-50%)", color: "#ffd000", fontWeight: 900, fontSize: 16, textShadow: "0 0 14px #ffd000", pointerEvents: "none", whiteSpace: "nowrap" }}>x{combo} COMBO! 🔥</div>}
+            
+            {/* Active Buff State Badge */}
             {activePowerUp && <div style={{ position: "absolute", top: 8, left: 8, background: "rgba(0,200,255,0.16)", border: "1px solid rgba(0,200,255,0.4)", borderRadius: 8, padding: "3px 8px", color: "#00e5ff", fontSize: 9, fontWeight: 700 }}>{activePowerUp} ACTIVE</div>}
             
-            {/* Durdurma Butonu - 03.webp Alt Sol Köşe */}
-            <button onClick={() => setIsPaused(p => !p)} style={{ position: "absolute", bottom: 12, left: 14, width: 34, height: 34, borderRadius: "50%", background: "rgba(10,8,40,0.7)", border: "2px solid #00d4ff", color: "#00d4ff", cursor: "pointer", fontSize: 12, display: "flex", alignItems: "center", justifyContent: "center", boxShadow: "0 0 10px rgba(0,212,255,0.4)" }}>
+            {/* Action Session Overlay Modifiers */}
+            <button onClick={() => setIsPaused(p => !p)} style={{ position: "absolute", bottom: 10, left: 10, width: 36, height: 36, borderRadius: "50%", background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.2)", color: "#fff", cursor: "pointer", fontSize: 14, display: "flex", alignItems: "center", justifyContent: "center" }}>
               {isPaused ? "▶" : "⏸"}
             </button>
-            {/* Özel Efekt/Yıldırım Butonu - 03.webp Alt Sağ Köşe */}
-            <button onClick={openLB} style={{ position: "absolute", bottom: 12, right: 14, width: 34, height: 34, borderRadius: "50%", background: "rgba(10,8,40,0.7)", border: "2px solid #ffd000", color: "#ffd000", cursor: "pointer", fontSize: 12, display: "flex", alignItems: "center", justifyContent: "center", boxShadow: "0 0 10px rgba(255,208,0,0.4)" }}>
+            <button onClick={openLB} style={{ position: "absolute", bottom: 10, right: 10, width: 36, height: 36, borderRadius: "50%", background: "rgba(255,200,0,0.12)", border: "1px solid rgba(255,200,0,0.3)", color: "#ffd000", cursor: "pointer", fontSize: 14, display: "flex", alignItems: "center", justifyContent: "center" }}>
               ⚡
             </button>
 
-            {/* ===== GAME OVER MENÜSÜ (01.webp - Büyütüldü & Canlı Fosforlu Hale Getirildi) ===== */}
+            {/* Game Over Action Board View overlay */}
             {gameState === "gameover" && (
-              <div style={{ position: "absolute", inset: 0, background: "rgba(4,2,20,0.95)", backdropFilter: "blur(8px)", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 18, padding: "20px" }}>
-                <div style={{ fontWeight: 900, fontSize: 44, letterSpacing: 3, background: "linear-gradient(135deg, #ff3060, #ff8500)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", textShadow: "0 0 25px rgba(255,48,96,0.4)" }}>GAME OVER</div>
-                {isNewHigh && <div style={{ color: "#ffd000", fontWeight: 700, fontSize: 15, letterSpacing: 1 }}>🌟 NEW HIGH SCORE!</div>}
+              <div style={{ position: "absolute", inset: 0, background: "rgba(4,2,20,0.92)", backdropFilter: "blur(6px)", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 14, padding: 24 }}>
+                <div style={{ fontWeight: 900, fontSize: 40, letterSpacing: 3, background: "linear-gradient(135deg, #ff4060, #ff8000)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>GAME OVER</div>
+                {isNewHigh && <div style={{ color: "#ffd000", fontWeight: 700, fontSize: 14, letterSpacing: 1 }}>🌟 NEW HIGH SCORE!</div>}
                 
-                {/* Veri Tablosu */}
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", background: "rgba(255,255,255,0.06)", borderRadius: 16, padding: "18px 14px", border: "1px solid rgba(255,255,255,0.1)", width: "100%" }}>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 0, background: "rgba(255,255,255,0.06)", borderRadius: 18, padding: "16px 12px", border: "1px solid rgba(255,255,255,0.1)", width: "100%" }}>
                   {[{ l: "SCORE", v: score.toLocaleString(), c: "#fff" }, { l: "BEST SCORE", v: Math.max(score, bestScore).toLocaleString(), c: "#ffd000" }, { l: "LEVEL", v: level, c: "#b060ff" }].map((s, i) => (
-                    <div key={s.l} style={{ textAlign: "center", borderLeft: i > 0 ? "1px solid rgba(255,255,255,0.08)" : "none" }}>
-                      <div style={{ color: "#655885", fontSize: 10, fontWeight: 700, letterSpacing: 1, marginBottom: 2 }}>{s.l}</div>
-                      <div style={{ color: s.c, fontWeight: 900, fontSize: 22 }}>{s.v}</div>
+                    <div key={s.l} style={{ textAlign: "center", padding: "4px 0", borderLeft: i > 0 ? "1px solid rgba(255,255,255,0.08)" : "none" }}>
+                      <div style={{ color: "#504070", fontSize: 9, fontWeight: 700, letterSpacing: 1 }}>{s.l}</div>
+                      <div style={{ color: s.c, fontWeight: 900, fontSize: 20 }}>{s.v}</div>
                     </div>
                   ))}
                 </div>
-
-                {/* Buton Düzeni (01.webp Birebir Ölçeklendirme) */}
-                <div style={{ display: "flex", gap: 20, marginTop: 10, alignItems: "center" }}>
-                  <button onClick={() => setGameState("menu")} style={{ width: 64, height: 64, borderRadius: "50%", background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.18)", color: "#fff", cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: 700, gap: 2 }}>
-                    <span style={{ fontSize: 20 }}>🏠</span>HOME
+                
+                <div style={{ display: "flex", gap: 16, marginTop: 6, alignItems: "center" }}>
+                  <button onClick={() => setGameState("menu")} style={{ width: 62, height: 62, borderRadius: "50%", background: "rgba(255,255,255,0.09)", border: "1px solid rgba(255,255,255,0.18)", color: "#fff", cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: 700, gap: 2 }}>
+                    <span style={{ fontSize: 22 }}>🏠</span>HOME
                   </button>
-                  
-                  {/* RETRY: Çok daha büyük, fosforlu ve ultra canlı (01.webp mor parlama) */}
-                  <button onClick={startGame} disabled={isPaying} style={{ width: 92, height: 92, borderRadius: "50%", background: "linear-gradient(135deg, #a040ff 0%, #6b00ff 100%)", border: "2px solid rgba(225,180,255,0.8)", color: "#fff", cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", fontSize: 13, fontWeight: 900, gap: 2, boxShadow: "0 0 35px #8a22ff, 0 0 70px rgba(138,34,255,0.5), inset 0 0 10px rgba(255,255,255,0.4)", opacity: isPaying ? 0.65 : 1 }}>
-                    <span style={{ fontSize: 28, textShadow: "0 0 10px #fff" }}>↺</span>RETRY
+                  <button onClick={() => setShowConfirmOverlay(true)} disabled={isPaying} style={{ width: 82, height: 82, borderRadius: "50%", background: "linear-gradient(135deg, #c060ff, #8030ff)", border: "2px solid rgba(220,150,255,0.6)", color: "#fff", cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 900, gap: 2, boxShadow: "0 0 30px rgba(180,80,255,0.75)" }}>
+                    <span style={{ fontSize: 26 }}>↺</span>RETRY
                   </button>
-                  
                   <div style={{ position: "relative" }}>
-                    <button onClick={() => setShareMenuOpen(o => !o)} style={{ width: 64, height: 64, borderRadius: "50%", background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.18)", color: "#fff", cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: 700, gap: 2 }}>
-                      <span style={{ fontSize: 20 }}>📤</span>SHARE
+                    <button onClick={() => setShareMenuOpen(o => !o)} style={{ width: 62, height: 62, borderRadius: "50%", background: "rgba(255,255,255,0.09)", border: "1px solid rgba(255,255,255,0.18)", color: "#fff", cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: 700, gap: 2 }}>
+                      <span style={{ fontSize: 22 }}>📤</span>SHARE
                     </button>
                     <ShareMenu />
                   </div>
@@ -522,43 +665,43 @@ export default function BrickBreakerMiniApp() {
             )}
           </div>
 
-          {/* ===== CANLI VE RENKLİ GÜÇ PANELİ (02.webp & 03.webp Teması) ===== */}
-          <div style={{ background: "linear-gradient(180deg, #090622 0%, #0d0934 100%)", borderTop: "2px solid rgba(0, 212, 255, 0.3)", padding: "12px 14px", boxShadow: "0 -10px 25px rgba(0,0,0,0.5)" }}>
-            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-              <div style={{ color: "#5a5095", fontSize: 10, fontWeight: 900, letterSpacing: 2, textAlign: "center" }}>POWER-UPS</div>
-              
-              {/* 5 Slotlu Transparan Neon Kart Yapısı (02.webp) */}
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 6, alignItems: "center" }}>
+          {/* Power-ups Horizontal Dashboard Bar */}
+          <div style={{ background: "linear-gradient(180deg, #0c0828 0%, #100c30 100%)", borderTop: "1px solid rgba(120,80,255,0.25)", padding: "10px 16px" }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <div style={{ color: "#5040a0", fontSize: 9, fontWeight: 700, letterSpacing: 2 }}>POWER-UPS</div>
+              <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
                 {[
-                  { k: "WIDE", ic: "↔", lb: "EXPAND", c: "#00d4ff", bg: "rgba(0,212,255,0.08)", border: "rgba(0,212,255,0.3)" },
-                  { k: "LASER", ic: "⚡", lb: "LASER", c: "#ff00a0", bg: "rgba(255,0,160,0.08)", border: "rgba(255,0,160,0.3)" },
-                  { k: "LIFE", ic: "❤️", lb: "EXTRA LIFE", c: "#ff3070", bg: "rgba(255,48,112,0.08)", border: "rgba(255,48,112,0.3)" },
-                  { k: "MULTI", ic: "🔮", lb: "MULTIBALL", c: "#a040ff", bg: "rgba(160,64,255,0.08)", border: "rgba(160,64,255,0.3)" },
-                  { k: "FREEZE", ic: "❄️", lb: "SLOW BALL", c: "#00f0ff", bg: "rgba(0,240,255,0.08)", border: "rgba(0,240,255,0.3)" },
+                  { k: "WIDE", ic: "↔", lb: "EXPAND", c: "#00d4ff", bg: "rgba(0,212,255,0.15)", border: "rgba(0,212,255,0.45)" },
+                  { k: "FIRE", ic: "🔥", lb: "FIRE", c: "#ff9000", bg: "rgba(255,144,0,0.15)", border: "rgba(255,144,0,0.45)" },
+                  { k: "LIFE", ic: "❤️", lb: "EXTRA LIFE", c: "#ff3070", bg: "rgba(255,48,112,0.15)", border: "rgba(255,48,112,0.45)" },
+                  { k: "FREEZE", ic: "❄️", lb: "SLOW BALL", c: "#60c8ff", bg: "rgba(96,200,255,0.15)", border: "rgba(96,200,255,0.45)" },
                 ].map(pu => {
-                  const amt = puCounts[pu.k] || 0;
-                  const active = amt > 0;
+                  const active = puCounts[pu.k] > 0;
                   return (
-                    <div key={pu.k} style={{ display: "flex", flexDirection: "column", alignItems: "center", background: pu.bg, border: `1px solid ${active ? pu.c : pu.border}`, borderRadius: 10, padding: "6px 2px", boxShadow: active ? `0 0 10px ${pu.c}30` : "none", transition: "all 0.3s" }}>
-                      <div style={{ fontSize: 18, filter: active ? "none" : "grayscale(80%)", opacity: active ? 1 : 0.4, marginBottom: 2 }}>{pu.ic}</div>
-                      <div style={{ color: "#a0a8c8", fontSize: 7, fontWeight: 700, letterSpacing: 0.2, transform: "scale(0.9)", whiteSpace: "nowrap", marginBottom: 3 }}>{pu.lb}</div>
-                      <div style={{ background: "rgba(0,0,0,0.4)", color: active ? pu.c : "#4a4270", fontSize: 11, fontWeight: 900, minWidth: 24, borderRadius: 6, textAlign: "center", padding: "1px 0" }}>{amt}</div>
+                    <div key={pu.k} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 3 }}>
+                      <div style={{ width: 40, height: 40, borderRadius: 11, background: active ? pu.bg : "rgba(255,255,255,0.04)", border: `1.5px solid ${active ? pu.border : "rgba(255,255,255,0.08)"}`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18, opacity: active ? 1 : 0.35, boxShadow: active ? `0 0 12px ${pu.c}40` : "none" }}>
+                        {pu.ic}
+                      </div>
+                      <div style={{ color: active ? pu.c : "#3a2060", fontSize: 11, fontWeight: 900 }}>{puCounts[pu.k]}</div>
+                      <div style={{ color: "#3a2060", fontSize: 7, letterSpacing: 0.3, whiteSpace: "nowrap" }}>{pu.lb}</div>
                     </div>
                   );
                 })}
               </div>
+              <button onClick={() => setIsMuted(m => !m)} style={{ background: "none", border: "none", fontSize: 18, cursor: "pointer", opacity: 0.6 }}>{isMuted ? "🔇" : "🎵"}</button>
             </div>
           </div>
         </div>
       )}
 
-      {/* ===== LEVEL UP EKRANI ===== */}
+      {/* ===== STATE 3: LEVEL UP METRICS SCREEN ===== */}
       {gameState === "levelup" && (
         <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "45px 22px", gap: 18, minHeight: 600, background: "linear-gradient(180deg, #06001e 0%, #18006a 50%, #06001e 100%)" }}>
           <div style={{ fontWeight: 900, fontSize: 40, letterSpacing: 3, color: "#e060ff", textShadow: "0 0 40px #c040ff" }}>LEVEL UP!</div>
           <div style={{ color: "#8090b0", fontWeight: 700, fontSize: 13, letterSpacing: 3 }}>YOU REACHED</div>
-          <div style={{ fontWeight: 900, fontSize: 56, color: "#00d4ff", textShadow: "0 0 35px #00b0ff" }}>LEVEL {level}</div>
+          <div style={{ fontWeight: 900, fontSize: 56, color: "#00d4ff" }}>LEVEL {level}</div>
           <div style={{ width: 78, height: 78, borderRadius: "50%", background: "radial-gradient(circle at 32% 28%, #fff, #c060ff)", boxShadow: "0 0 55px #8040ff", margin: "8px 0" }} />
+          
           <div style={{ width: "100%", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
             {[{ l: "SCORE", v: score.toLocaleString(), c: "#fff" }, { l: "XP GAINED", v: `+${xpGained} XP`, c: "#a070ff" }].map(s => (
               <div key={s.l} style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 18, padding: 18, textAlign: "center" }}>
@@ -567,12 +710,12 @@ export default function BrickBreakerMiniApp() {
               </div>
             ))}
           </div>
-          <button onClick={doNextLevel} style={{ width: "100%", padding: 18, borderRadius: 18, fontWeight: 900, fontSize: 17, letterSpacing: 2, cursor: "pointer", border: "none", background: "linear-gradient(135deg, #8040ff, #5020c0)", color: "#fff", boxShadow: "0 0 35px rgba(120,64,255,0.55)" }}>▶  NEXT LEVEL</button>
+          <button onClick={doNextLevel} style={{ width: "100%", padding: 18, borderRadius: 18, fontWeight: 900, fontSize: 17, letterSpacing: 2, cursor: "pointer", border: "none", background: "linear-gradient(135deg, #8040ff, #5020c0)", color: "#fff" }}>▶  NEXT LEVEL</button>
           <button onClick={openLB} style={{ width: "100%", padding: 14, borderRadius: 16, fontWeight: 700, fontSize: 12, letterSpacing: 1.5, cursor: "pointer", border: "1px solid rgba(255,200,0,0.3)", background: "rgba(255,200,0,0.09)", color: "#ffd000" }}>🏆 LEADERBOARD</button>
         </div>
       )}
 
-      {/* ===== LEADERBOARD ===== */}
+      {/* ===== STATE 4: GLOBAL SECURE LEADERBOARD ===== */}
       {gameState === "leaderboard" && (
         <div style={{ minHeight: 600, display: "flex", flexDirection: "column" }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 16px", borderBottom: "1px solid rgba(255,255,255,0.07)" }}>
@@ -580,13 +723,15 @@ export default function BrickBreakerMiniApp() {
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}><span style={{ fontSize: 22 }}>🏆</span><span style={{ color: "#fff", fontWeight: 900, fontSize: 17, letterSpacing: 1.5 }}>LEADERBOARD</span></div>
             {isConnected ? <span style={{ color: "#e060ff", fontSize: 10, fontWeight: 700 }}>{address.slice(0, 4)}...{address.slice(-4)}</span> : <span />}
           </div>
+          
           <div style={{ display: "flex", gap: 6, padding: "10px 16px 8px" }}>
             {["GLOBAL", "FRIENDS", "TOURNAMENT"].map((t, i) => (
               <button key={t} style={{ padding: "7px 12px", borderRadius: 9, fontWeight: 700, fontSize: 10, cursor: "pointer", border: "none", background: i === 0 ? "#7040ff" : "rgba(255,255,255,0.05)", color: i === 0 ? "#fff" : "#504080" }}>{t}</button>
             ))}
           </div>
+          
           <div style={{ padding: "4px 16px", display: "flex", flexDirection: "column", gap: 7, flex: 1, overflowY: "auto", maxHeight: 360 }}>
-            {leaderboardLoading ? <div style={{ color: "#504080", textAlign: "center", padding: 30 }}>Loading...</div>
+            {leaderboardLoading ? <div style={{ color: "#504080", textAlign: "center", padding: 30 }}>Loading Leaderboard Entries...</div>
               : leaderboardRows.length === 0 ? <div style={{ color: "#504080", textAlign: "center", padding: 30, fontSize: 12 }}>No scores yet. Be the first!</div>
               : leaderboardRows.map((row, idx) => {
                 const isMe = address && row.wallet_address?.toLowerCase() === address.toLowerCase();
@@ -610,9 +755,21 @@ export default function BrickBreakerMiniApp() {
                 );
               })}
           </div>
-          <div style={{ textAlign: "center", padding: "6px 0 10px", color: "#403060", fontSize: 9, display: "flex", alignItems: "center", justifyContent: "center", gap: 4 }}>⏱ SEASON ENDS IN: 6D 14H 32M</div>
+          
+          {address && leaderboardRows.length > 0 && !leaderboardRows.some(r => r.wallet_address?.toLowerCase() === address.toLowerCase()) && (
+            <div style={{ margin: "0 16px 8px", padding: "10px 12px", borderRadius: 14, background: "rgba(120,60,255,0.12)", border: "1px solid rgba(120,60,255,0.28)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <span style={{ color: "#8060c0", fontWeight: 900, width: 22, textAlign: "center" }}>?</span>
+                <div style={{ width: 32, height: 32, borderRadius: "50%", background: "#6040b0", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontWeight: 900, fontSize: 10 }}>{address.slice(2, 4).toUpperCase()}</div>
+                <div style={{ color: "#d0d0e0", fontSize: 11 }}>You</div>
+              </div>
+              <div style={{ color: "#b070ff", fontWeight: 900, fontSize: 14 }}>{score > 0 ? score.toLocaleString() : "—"}</div>
+            </div>
+          )}
+          <div style={{ textAlign: "center", padding: "6px 0 10px", color: "#403060", fontSize: 9 }}>⏱ SEASON ENDS IN: 6D 14H 32M</div>
+          
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, padding: "0 16px 16px" }}>
-            <button onClick={startGame} disabled={isPaying} style={{ padding: 14, borderRadius: 16, fontWeight: 900, fontSize: 13, letterSpacing: 1, cursor: "pointer", border: "none", background: "linear-gradient(135deg, #e060ff, #a040ff)", color: "#fff", boxShadow: "0 0 20px rgba(200,64,255,0.4)", opacity: isPaying ? 0.6 : 1 }}>
+            <button onClick={() => setShowConfirmOverlay(true)} disabled={isPaying} style={{ padding: 14, borderRadius: 16, fontWeight: 900, fontSize: 13, letterSpacing: 1, cursor: "pointer", border: "none", background: "linear-gradient(135deg, #e060ff, #a040ff)", color: "#fff" }}>
               {isPaying ? "..." : "▶ PLAY AGAIN"}
             </button>
             <div style={{ position: "relative" }}>
