@@ -7,9 +7,6 @@ import { createClient } from "@supabase/supabase-js";
 import { useAccount, useConnect, useDisconnect, useSendTransaction } from "wagmi";
 import { parseEther } from "viem";
 
-// ==========================================
-// 1. CONFIGURATIONS & CONSTANTS
-// ==========================================
 const GAME_FEE_RECIPIENT = "0xBe96fB12585Bd1cd2822Ae451A69eA5E8970806F";
 const GAME_FEE_AMOUNT = parseEther("0.00001");
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
@@ -29,30 +26,23 @@ const ROW_COLORS = [
 ];
 
 export default function BrickBreakerMiniApp() {
-  // Web3 & Wallet Hooks
   const { address, isConnected } = useAccount();
   const { connect, connectors } = useConnect();
   const { disconnect } = useDisconnect();
   const { sendTransactionAsync } = useSendTransaction();
-
-  // Canvas & Audio Refs
   const canvasRef = useRef(null);
   const bgCanvasRef = useRef(null);
   const bgMusicRef = useRef(null);
 
-  // Core Game States
-  const [gameState, setGameState] = useState("menu");
   const [isPaying, setIsPaying] = useState(false);
   const [paymentError, setPaymentError] = useState(null);
-  const [showConfirmOverlay, setShowConfirmOverlay] = useState(false);
   const [score, setScore] = useState(0);
   const [level, setLevel] = useState(1);
   const [lives, setLives] = useState(4);
+  const [gameState, setGameState] = useState("menu");
   const [isPaused, setIsPaused] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
   const [gameMode, setGameMode] = useState("tournament");
-  
-  // Progression & Social States
   const [playerLv, setPlayerLv] = useState(1);
   const [playerXp, setPlayerXp] = useState(0);
   const [xpGained, setXpGained] = useState(0);
@@ -65,11 +55,9 @@ export default function BrickBreakerMiniApp() {
   const [combo, setCombo] = useState(0);
   const [showCombo, setShowCombo] = useState(false);
   const [isNewHigh, setIsNewHigh] = useState(false);
-  const [puCounts, setPuCounts] = useState({ WIDE: 0, FIRE: 0, LIFE: 0, FREEZE: 0 });
+  const [puCounts, setPuCounts] = useState({ WIDE: 0, FIRE: 0, LIFE: 0, FREEZE: 0, MULTIBALL: 0 });
   const [prevState, setPrevState] = useState("menu");
-  const [notification, setNotification] = useState(null);
 
-  // Gameplay Engineering Engine Refs
   const scoreRef = useRef(0);
   const levelRef = useRef(1);
   const livesRef = useRef(4);
@@ -77,65 +65,32 @@ export default function BrickBreakerMiniApp() {
   const pausedRef = useRef(false);
   const pxRef = useRef((W - PW) / 2);
   const pwRef = useRef(PW);
-  const bxRef = useRef(W / 2);
-  const byRef = useRef(H - 40);
-  const vxRef = useRef(1.8);
-  const vyRef = useRef(-1.8);
+  
+  // Çoklu top (Multiball) mimarisi için dizi ref'i
+  const ballsRef = useRef([]);
   const bricksRef = useRef([]);
-  const trailRef = useRef([]);
   const puRef = useRef([]);
   const frozenRef = useRef(false);
   const fireRef = useRef(false);
   const ptcRef = useRef([]);
   const comboRef = useRef(0);
   const bestRef = useRef(0);
-  const notificationTimeoutRef = useRef(null);
+  const shakeRef = useRef(0);
 
-  // Sync state variables to refs to prevent requestAnimationFrame scope closures
   useEffect(() => { scoreRef.current = score; }, [score]);
   useEffect(() => { levelRef.current = level; }, [level]);
   useEffect(() => { livesRef.current = lives; }, [lives]);
   useEffect(() => { gsRef.current = gameState; }, [gameState]);
   useEffect(() => { pausedRef.current = isPaused; }, [isPaused]);
   useEffect(() => { bestRef.current = bestScore; }, [bestScore]);
+  useEffect(() => { const req = playerLv * 100; if (playerXp >= req) { setPlayerLv(l => l + 1); setPlayerXp(x => x - req); } }, [playerXp, playerLv]);
+  useEffect(() => { const init = async () => { try { const { sdk } = await import("@farcaster/miniapp-sdk"); if (sdk) { await sdk.actions.init(); setIsSdkLoaded(true); await sdk.actions.ready(); } } catch (e) { setIsSdkLoaded(true); } }; init(); }, []);
 
-  // Level Up Progression Calculator
-  useEffect(() => {
-    const req = playerLv * 100;
-    if (playerXp >= req) {
-      setPlayerLv(l => l + 1);
-      setPlayerXp(x => x - req);
-      triggerNotification("GLOBAL LEVEL INCREASED! ⚡");
-    }
-  }, [playerXp, playerLv]);
-
-  // Farcaster SDK Initialization Safeguard
-  useEffect(() => {
-    const init = async () => {
-      try {
-        const { sdk } = await import("@farcaster/miniapp-sdk");
-        if (sdk) {
-          await sdk.actions.init();
-          setIsSdkLoaded(true);
-          await sdk.actions.ready();
-        }
-      } catch (e) {
-        setIsSdkLoaded(true);
-      }
-    };
-    init();
-  }, []);
-
-  // Self-Expiring Top-Bar HUD Notification Trigger
-  const triggerNotification = (msg) => {
-    if (notificationTimeoutRef.current) clearTimeout(notificationTimeoutRef.current);
-    setNotification(msg);
-    notificationTimeoutRef.current = setTimeout(() => {
-      setNotification(null);
-    }, 2000);
+  const triggerScreenShake = (amt) => {
+    shakeRef.current = amt;
   };
 
-  // Ambient Pad Background Music Generator
+  // Arka plan müziği
   const startBgMusic = useCallback(() => {
     if (isMuted) return;
     try {
@@ -146,7 +101,6 @@ export default function BrickBreakerMiniApp() {
       const master = ctx.createGain();
       master.gain.setValueAtTime(0.04, ctx.currentTime);
       master.connect(ctx.destination);
-
       const freqs = [110, 138.6, 165, 220];
       const oscs = freqs.map((f, i) => {
         const o = ctx.createOscillator();
@@ -158,14 +112,7 @@ export default function BrickBreakerMiniApp() {
         o.start();
         return o;
       });
-      bgMusicRef.current = {
-        ctx, oscs, master,
-        stop: () => {
-          oscs.forEach(o => { try { o.stop(); } catch(e) {} });
-          try { ctx.close(); } catch(e) {}
-          bgMusicRef.current = null;
-        }
-      };
+      bgMusicRef.current = { ctx, oscs, master, stop: () => { oscs.forEach(o => { try { o.stop(); } catch(e) {} }); try { ctx.close(); } catch(e) {} bgMusicRef.current = null; } };
     } catch (e) {}
   }, [isMuted]);
 
@@ -175,9 +122,9 @@ export default function BrickBreakerMiniApp() {
     if (gameState === "menu" && !isMuted) startBgMusic();
     else stopBgMusic();
     return () => { if (gameState !== "menu") stopBgMusic(); };
-  }, [gameState, isMuted, startBgMusic, stopBgMusic]);
+  }, [gameState, isMuted]);
 
-  // Audio Synthesizer Engine
+  // Ses efektleri
   const audio = useCallback((t) => {
     if (isMuted) return;
     try {
@@ -187,10 +134,7 @@ export default function BrickBreakerMiniApp() {
       const cfg = { hit: [200, 0.12, 0.07], brick: [420, 0.22, 0.09], lose: [90, 0.18, 0.45], powerup: [560, 0.20, 0.18], levelup: [750, 0.18, 0.4] };
       const [freq, vol, dur] = cfg[t] || [300, 0.1, 0.1];
       o.frequency.setValueAtTime(freq, c.currentTime);
-      if (t === "brick") {
-        o.type = "square";
-        o.frequency.exponentialRampToValueAtTime(freq * 0.5, c.currentTime + dur);
-      }
+      if (t === "brick") { o.type = "square"; o.frequency.setValueAtTime(freq, c.currentTime); o.frequency.exponentialRampToValueAtTime(freq * 0.5, c.currentTime + dur); }
       g.gain.setValueAtTime(vol, c.currentTime); g.gain.exponentialRampToValueAtTime(0.001, c.currentTime + dur);
       o.start(); o.stop(c.currentTime + dur);
     } catch (e) {}
@@ -204,96 +148,98 @@ export default function BrickBreakerMiniApp() {
 
   const fetchLB = useCallback(async () => {
     setLeaderboardLoading(true);
-    try {
-      const { data } = await supabase.from("leaderboard").select("wallet_address, best_score, best_level").order("best_score", { ascending: false }).limit(10);
-      setLeaderboardRows(data || []);
-    } catch (e) {
-      setLeaderboardRows([]);
-    } finally {
-      setLeaderboardLoading(false);
-    }
+    try { const { data } = await supabase.from("leaderboard").select("wallet_address, best_score, best_level").order("best_score", { ascending: false }).limit(10); setLeaderboardRows(data || []); } catch (e) { setLeaderboardRows([]); } finally { setLeaderboardLoading(false); }
   }, []);
 
   const spawnPtc = (bx, by, bw, bh, color) => {
-    for (let i = 0; i < 8; i++) {
-      ptcRef.current.push({
-        x: bx + bw / 2 + (Math.random() - 0.5) * bw * 0.7,
-        y: by + bh / 2 + (Math.random() - 0.5) * bh,
-        vx: (Math.random() - 0.5) * 5,
-        vy: (Math.random() - 0.5) * 5 - 1.5,
-        life: 1,
-        decay: 0.05 + Math.random() * 0.05,
-        size: 2.5 + Math.random() * 4,
-        color
-      });
-    }
+    for (let i = 0; i < 10; i++) ptcRef.current.push({ x: bx + bw / 2 + (Math.random() - 0.5) * bw * 0.7, y: by + bh / 2 + (Math.random() - 0.5) * bh, vx: (Math.random() - 0.5) * 6, vy: (Math.random() - 0.5) * 6 - 2, life: 1, decay: 0.04 + Math.random() * 0.05, size: 2.5 + Math.random() * 4, color });
   };
 
-  // Tuğla Oluşturma ve Renkleri Tamamen Karıştırma Sistemi
   const genBricks = (lv = 1) => {
     const rows = 5 + Math.floor((lv - 1) / 5), cols = 7, pad = 5, oTop = 14, oLeft = 7;
     const bw = (W - oLeft * 2 - pad * (cols - 1)) / cols, bh = 18;
     const arr = [];
+    
     for (let r = 0; r < rows; r++) {
       for (let c = 0; c < cols; c++) {
-        // Her bir tuğla için renk havuzundan tamamen rastgele bir renk seçiliyor
-        const randomColor = ROW_COLORS[Math.floor(Math.random() * ROW_COLORS.length)];
         arr.push({ 
           x: c * (bw + pad) + oLeft, 
           y: r * (bh + pad) + oTop, 
           width: bw, 
           height: bh, 
           status: 1, 
-          rc: randomColor, 
-          pu: null 
+          rc: ROW_COLORS[r % ROW_COLORS.length], 
+          pu: null,
+          hp: 1,
+          type: "NORMAL" 
         });
       }
     }
+
     const shuf = arr.map((_, i) => i);
-    for (let i = shuf.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [shuf[i], shuf[j]] = [shuf[j], shuf[i]];
-    }
-    let cnt = 0, cur = 0;
-    if (lv % 3 === 0) { arr[shuf[cur++]].pu = "LIFE"; cnt++; }
-    const types = ["FREEZE", "FIRE", "WIDE"];
-    for (; cur < shuf.length && cnt < 5; cur++) {
-      if (Math.random() < 0.14) {
-        arr[shuf[cur]].pu = types[Math.floor(Math.random() * 3)];
+    for (let i = shuf.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [shuf[i], shuf[j]] = [shuf[j], shuf[i]]; }
+    
+    let cur = 0;
+    if (lv % 3 === 0) { arr[shuf[cur++]].pu = "LIFE"; }
+    
+    // Geliştirilmiş Power-up Dağılımı (MULTIBALL eklendi)
+    const types = ["FREEZE", "FIRE", "WIDE", "MULTIBALL"];
+    for (let cnt = 0; cur < shuf.length && cnt < 6; cur++) {
+      if (Math.random() < 0.16) {
+        arr[shuf[cur]].pu = types[Math.floor(Math.random() * types.length)];
         cnt++;
       }
     }
+
+    // Dinamik Yeni Tuğla Tipleri (Zırhlı ve TNT)
+    for (let aCnt = 0; cur < shuf.length && aCnt < 4; cur++) {
+      if (arr[shuf[cur]].pu === null && Math.random() < 0.2) {
+        arr[shuf[cur]].type = "ARMORED";
+        arr[shuf[cur]].hp = 2; // Kırılmak için 2 vuruş ister
+        aCnt++;
+      }
+    }
+
+    for (let tCnt = 0; cur < shuf.length && tCnt < 2; cur++) {
+      if (arr[shuf[cur]].pu === null && arr[shuf[cur]].type === "NORMAL" && Math.random() < 0.15) {
+        arr[shuf[cur]].type = "TNT"; // Patlayıcı zincirleme reaksiyon tuğlası
+        tCnt++;
+      }
+    }
+
     bricksRef.current = arr;
   };
 
   const resetBall = (lv = levelRef.current) => {
-    bxRef.current = W / 2; byRef.current = H - 50;
     let sp = 1.8 + (lv - 1) * 0.12;
     if (frozenRef.current) sp *= 0.5;
-    vxRef.current = Math.random() > 0.5 ? sp : -sp; vyRef.current = -sp; trailRef.current = [];
+    const initialVx = Math.random() > 0.5 ? sp : -sp;
+    
+    // Başlangıçta ana topu diziye ekle
+    ballsRef.current = [{
+      x: W / 2,
+      y: H - 50,
+      vx: initialVx,
+      vy: -sp,
+      isFire: fireRef.current,
+      isFrozen: frozenRef.current,
+      trail: []
+    }];
   };
 
-  const verifyAndStartMatch = async () => {
-    if (!isConnected) { triggerNotification("CONNECT YOUR WALLET FIRST! 🔌"); return; }
+  const startGame = async () => {
+    if (!isConnected) { alert("Please connect your wallet first!"); return; }
     setPaymentError(null);
     if (gameMode === "tournament") {
       setIsPaying(true);
-      try {
-        await sendTransactionAsync({ to: GAME_FEE_RECIPIENT, value: GAME_FEE_AMOUNT });
-      } catch {
-        setPaymentError("Payment rejected.");
-        setIsPaying(false);
-        return;
-      }
+      try { await sendTransactionAsync({ to: GAME_FEE_RECIPIENT, value: GAME_FEE_AMOUNT }); } catch { setPaymentError("Payment rejected."); setIsPaying(false); return; }
       setIsPaying(false);
     }
-    setShowConfirmOverlay(false);
     setScore(0); setLevel(1); setLives(4); setXpGained(0); setCombo(0); setIsNewHigh(false); setIsPaused(false);
-    setPuCounts({ WIDE: 0, FIRE: 0, LIFE: 0, FREEZE: 0 }); setActivePowerUp(null);
+    setPuCounts({ WIDE: 0, FIRE: 0, LIFE: 0, FREEZE: 0, MULTIBALL: 0 }); setActivePowerUp(null);
     pwRef.current = PW; puRef.current = []; frozenRef.current = false; fireRef.current = false;
-    trailRef.current = []; ptcRef.current = []; comboRef.current = 0; pausedRef.current = false;
+    ptcRef.current = []; comboRef.current = 0; pausedRef.current = false; shakeRef.current = 0;
     pxRef.current = (W - PW) / 2; genBricks(1); resetBall(1); setGameState("playing");
-    triggerNotification("MATCH LAUNCHED SECURELY 🕹️");
   };
 
   const checkVic = () => {
@@ -307,14 +253,14 @@ export default function BrickBreakerMiniApp() {
   const doNextLevel = () => {
     genBricks(levelRef.current); resetBall(levelRef.current);
     setActivePowerUp(null); puRef.current = []; frozenRef.current = false; fireRef.current = false;
-    ptcRef.current = []; comboRef.current = 0; setCombo(0); setIsPaused(false); pausedRef.current = false;
-    setPuCounts({ WIDE: 0, FIRE: 0, LIFE: 0, FREEZE: 0 }); setGameState("playing");
+    ptcRef.current = []; comboRef.current = 0; setCombo(0); setIsPaused(false); pausedRef.current = false; shakeRef.current = 0;
+    setPuCounts({ WIDE: 0, FIRE: 0, LIFE: 0, FREEZE: 0, MULTIBALL: 0 }); setGameState("playing");
   };
 
   const openLB = () => { setPrevState(gameState); setGameState("leaderboard"); fetchLB(); };
   const avatarColor = (w) => { const cs = ["#ff2d78","#ff6000","#ffd000","#00c853","#00bcd4","#7c4dff"]; let h = 0; for (let i = 0; i < w.length; i++) h = w.charCodeAt(i) + ((h << 5) - h); return cs[Math.abs(h) % cs.length]; };
 
-  // Menu Ambient Animation Engine
+  // Menü animasyonu
   useEffect(() => {
     if (gameState !== "menu") return;
     const cv = bgCanvasRef.current; if (!cv) return;
@@ -354,67 +300,190 @@ export default function BrickBreakerMiniApp() {
     return () => cancelAnimationFrame(aid);
   }, [gameState]);
 
-  // Main Canvas Physics Engine Loop
+  // Ana oyun döngüsü ve mekanikler
   useEffect(() => {
     let aid;
+    
     const drawBrick = (ctx, b) => {
       if (!b.status) return;
       const { x, y, width: bw, height: bh, rc } = b;
       const r = 6;
       ctx.save();
       ctx.shadowColor = "rgba(0,0,0,0.6)"; ctx.shadowBlur = 6; ctx.shadowOffsetX = 2; ctx.shadowOffsetY = 4;
-      const g = ctx.createLinearGradient(x, y, x, y + bh);
-      g.addColorStop(0, rc.top); g.addColorStop(0.5, rc.mid); g.addColorStop(1, rc.bot);
+      
+      let g = ctx.createLinearGradient(x, y, x, y + bh);
+      if (b.type === "TNT") {
+        g.addColorStop(0, "#ff4500"); g.addColorStop(0.5, "#ff8c00"); g.addColorStop(1, "#8b0000");
+      } else if (b.type === "ARMORED" && b.hp === 2) {
+        g.addColorStop(0, "#e6e6e6"); g.addColorStop(0.5, "#a6a6a6"); g.addColorStop(1, "#595959");
+      } else {
+        g.addColorStop(0, rc.top); g.addColorStop(0.5, rc.mid); g.addColorStop(1, rc.bot);
+      }
+      
       ctx.fillStyle = g; ctx.beginPath(); ctx.roundRect(x, y, bw, bh, r); ctx.fill();
       ctx.shadowColor = "transparent"; ctx.shadowBlur = 0; ctx.shadowOffsetX = 0; ctx.shadowOffsetY = 0;
       
       const sg = ctx.createLinearGradient(x, y, x, y + bh * 0.5);
-      sg.addColorStop(0, rc.shine); sg.addColorStop(1, "rgba(255,255,255,0)");
+      sg.addColorStop(0, b.type === "TNT" ? "rgba(255,200,150,0.6)" : b.type === "ARMORED" ? "rgba(255,255,255,0.6)" : rc.shine);
+      sg.addColorStop(1, "rgba(255,255,255,0)");
       ctx.fillStyle = sg; ctx.beginPath(); ctx.roundRect(x + 2, y + 2, bw - 4, bh * 0.48, [r - 1, r - 1, 2, 2]); ctx.fill();
       
       ctx.fillStyle = "rgba(255,255,255,0.15)";
       ctx.beginPath(); ctx.roundRect(x + 1, y + 2, 2, bh - 4, 1); ctx.fill();
-      if (b.pu) { const icons = { LIFE: "♥", FREEZE: "❄", FIRE: "🔥", WIDE: "↔" }; ctx.font = `bold ${Math.floor(bh * 0.52)}px sans-serif`; ctx.fillStyle = "rgba(255,255,255,0.95)"; ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText(icons[b.pu] || "?", x + bw / 2, y + bh / 2 + 1); }
+      
+      if (b.type === "TNT") {
+        ctx.font = "bold 9px sans-serif"; ctx.fillStyle = "#fff"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+        ctx.fillText("💥", x + bw / 2, y + bh / 2 + 1);
+      } else if (b.type === "ARMORED" && b.hp === 2) {
+        ctx.font = "bold 9px sans-serif"; ctx.fillStyle = "#fff"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+        ctx.fillText("🛡️", x + bw / 2, y + bh / 2 + 1);
+      } else if (b.pu) { 
+        const icons = { LIFE: "♥", FREEZE: "❄", FIRE: "🔥", WIDE: "↔", MULTIBALL: "⚾" }; 
+        ctx.font = `bold ${Math.floor(bh * 0.52)}px sans-serif`; ctx.fillStyle = "rgba(255,255,255,0.95)"; ctx.textAlign = "center"; ctx.textBaseline = "middle"; 
+        ctx.fillText(icons[b.pu] || "?", x + bw / 2, y + bh / 2 + 1); 
+      }
       ctx.restore();
     };
 
     const update = () => {
       if (gsRef.current !== "playing" || pausedRef.current) return;
-      bxRef.current += vxRef.current; byRef.current += vyRef.current;
-      trailRef.current.push({ x: bxRef.current, y: byRef.current }); if (trailRef.current.length > 14) trailRef.current.shift();
-      if (bxRef.current + BR > W || bxRef.current - BR < 0) { vxRef.current = -vxRef.current; audio("hit"); }
-      if (byRef.current - BR < 0) { vyRef.current = -vyRef.current; audio("hit"); }
-      if (vyRef.current > 0 && byRef.current + BR >= H - PH - 6 && bxRef.current >= pxRef.current && bxRef.current <= pxRef.current + pwRef.current) {
-        const hitFactor = ((bxRef.current - pxRef.current) / pwRef.current - 0.5) * 2;
-        const speed = Math.sqrt(vxRef.current * vxRef.current + vyRef.current * vyRef.current);
-        const maxAngle = 65 * (Math.PI / 180);
-        const angle = hitFactor * maxAngle;
-        vxRef.current = speed * Math.sin(angle);
-        vyRef.current = -Math.abs(speed * Math.cos(angle));
-        if (Math.abs(vxRef.current) < 0.4) vxRef.current = hitFactor >= 0 ? 0.4 : -0.4;
-        audio("hit"); comboRef.current = 0; setCombo(0);
-      }
-      if (byRef.current > H) { audio("lose"); comboRef.current = 0; setCombo(0); const nl = livesRef.current - 1; setLives(nl); if (nl <= 0) { setGameState("gameover"); submitScore(scoreRef.current, levelRef.current); } else resetBall(); }
-      ptcRef.current = ptcRef.current.filter(p => p.life > 0); ptcRef.current.forEach(p => { p.x += p.vx; p.y += p.vy; p.vy += 0.18; p.life -= p.decay; });
-      bricksRef.current.forEach(b => {
-        if (!b.status) return;
-        if (bxRef.current >= b.x && bxRef.current <= b.x + b.width && byRef.current >= b.y && byRef.current <= b.y + b.height) {
-          b.status = 0; comboRef.current++; const pts = 10 + (comboRef.current > 1 ? comboRef.current * 5 : 0);
-          setScore(s => s + pts); setCombo(comboRef.current); setShowCombo(true); setTimeout(() => setShowCombo(false), 900);
-          setPlayerXp(x => x + 5); spawnPtc(b.x, b.y, b.width, b.height, b.rc.mid); audio("brick");
-          if (!fireRef.current) vyRef.current = -vyRef.current;
-          if (b.pu) puRef.current.push({ x: b.x + b.width / 2, y: b.y + b.height, type: b.pu });
-          checkVic();
+      
+      let ballsAlive = [];
+      
+      // Tüm aktif topları güncelle (Çoklu Top Sistemi)
+      ballsRef.current.forEach(ball => {
+        ball.x += ball.vx;
+        ball.y += ball.vy;
+        
+        if (!ball.trail) ball.trail = [];
+        ball.trail.push({ x: ball.x, y: ball.y });
+        if (ball.trail.length > 12) ball.trail.shift();
+        
+        // Duvarlardan sekme ve sarsıntı tetikleme
+        if (ball.x + BR > W) { ball.x = W - BR; ball.vx = -ball.vx; audio("hit"); triggerScreenShake(2); }
+        if (ball.x - BR < 0) { ball.x = BR; ball.vx = -ball.vx; audio("hit"); triggerScreenShake(2); }
+        if (ball.y - BR < 0) { ball.y = BR; ball.vy = -ball.vy; audio("hit"); triggerScreenShake(2); }
+        
+        // Palet Çarpışması
+        const py = H - PH - 5;
+        if (ball.vy > 0 && ball.y + BR >= py && ball.y - BR <= py + PH && ball.x >= pxRef.current && ball.x <= pxRef.current + pwRef.current) {
+          const hitFactor = ((ball.x - pxRef.current) / pwRef.current - 0.5) * 2;
+          const speed = Math.sqrt(ball.vx * ball.vx + ball.vy * ball.vy);
+          const maxAngle = 65 * (Math.PI / 180);
+          const angle = hitFactor * maxAngle;
+          ball.vx = speed * Math.sin(angle);
+          ball.vy = -Math.abs(speed * Math.cos(angle));
+          if (Math.abs(ball.vx) < 0.4) ball.vx = hitFactor >= 0 ? 0.4 : -0.4;
+          audio("hit"); comboRef.current = 0; setCombo(0);
+        }
+        
+        // Tuğla Çarpışmaları ve Geliştirilmiş Puan/Kombo Katlayıcı
+        bricksRef.current.forEach(b => {
+          if (!b.status) return;
+          if (ball.x >= b.x && ball.x <= b.x + b.width && ball.y >= b.y && ball.y <= b.y + b.height) {
+            b.hp = (b.hp || 1) - 1;
+            triggerScreenShake(5); // Vuruş hissini artırmak için ekran sallama
+            
+            if (b.hp <= 0) {
+              b.status = 0;
+              comboRef.current++;
+              
+              // Dinamik Kombo Çarpan Sistemi
+              let pts = 10;
+              if (comboRef.current > 5) pts = 20;
+              if (comboRef.current > 10) pts = 35;
+              
+              setScore(s => s + pts);
+              setCombo(comboRef.current);
+              setShowCombo(true);
+              setPlayerXp(x => x + 5);
+              spawnPtc(b.x, b.y, b.width, b.height, b.rc.mid);
+              audio("brick");
+              
+              // TNT Patlayıcı Mekaniği (Çevre tuğlaları havaya uçurur)
+              if (b.type === "TNT") {
+                triggerScreenShake(12);
+                const radius = 65;
+                bricksRef.current.forEach(otherB => {
+                  if (!otherB.status || otherB === b) return;
+                  const dx = (otherB.x + otherB.width/2) - (b.x + b.width/2);
+                  const dy = (otherB.y + otherB.height/2) - (b.y + b.height/2);
+                  if (Math.sqrt(dx*dx + dy*dy) <= radius) {
+                    otherB.status = 0;
+                    comboRef.current++;
+                    setScore(s => s + 15);
+                    spawnPtc(otherB.x, otherB.y, otherB.width, otherB.height, otherB.rc.mid);
+                    if (otherB.pu) puRef.current.push({ x: otherB.x + otherB.width / 2, y: otherB.y + otherB.height, type: otherB.pu });
+                  }
+                });
+              }
+              
+              if (b.pu) puRef.current.push({ x: b.x + b.width / 2, y: b.y + b.height, type: b.pu });
+              checkVic();
+            } else {
+              // Zırhlı tuğlaya ilk vuruş yapıldığında
+              audio("hit");
+              spawnPtc(b.x, b.y, b.width, b.height, "#b0b0b0");
+            }
+            
+            if (!fireRef.current && !ball.isFire) ball.vy = -ball.vy;
+          }
+        });
+        
+        // Sadece ekranda kalan topları listeye dahil et
+        if (ball.y <= H + BR * 2) {
+          ballsAlive.push(ball);
         }
       });
+      
+      // Can Kaybı Kontrolü (Yalnızca tüm toplar bittiğinde can eksilir)
+      if (ballsRef.current.length > 0 && ballsAlive.length === 0) {
+        audio("lose");
+        comboRef.current = 0;
+        setCombo(0);
+        const nl = livesRef.current - 1;
+        setLives(nl);
+        if (nl <= 0) {
+          setGameState("gameover");
+          submitScore(scoreRef.current, levelRef.current);
+        } else {
+          resetBall();
+        }
+      } else {
+        ballsRef.current = ballsAlive;
+      }
+      
+      // Kapsül ve Güçlendiricilerin Aşağı Akışı
       puRef.current.forEach((p, i) => {
         p.y += 1.5;
         if (p.y >= H - PH - 12 && p.y <= H && p.x >= pxRef.current && p.x <= pxRef.current + pwRef.current) {
-          audio("powerup"); setPuCounts(prev => ({ ...prev, [p.type]: (prev[p.type] || 0) + 1 }));
-          if (p.type === "WIDE") { pwRef.current = PW * 1.5; setActivePowerUp("EXPAND"); setTimeout(() => { pwRef.current = PW; setActivePowerUp(null); }, 6000); triggerNotification("PADDLE EXPANDED"); }
-          else if (p.type === "LIFE") { setLives(l => Math.min(l + 1, 6)); triggerNotification("EXTRA LIFE ACQUIRED"); }
-          else if (p.type === "FREEZE" && !frozenRef.current) { frozenRef.current = true; vxRef.current *= 0.5; vyRef.current *= 0.5; setActivePowerUp("SLOW BALL"); setTimeout(() => { frozenRef.current = false; vxRef.current *= 2; vyRef.current *= 2; setActivePowerUp(null); }, 6000); triggerNotification("TEMPORARY MATRIX SLOWDOWN"); }
-          else if (p.type === "FIRE") { fireRef.current = true; setActivePowerUp("FIRE BALL"); setTimeout(() => { fireRef.current = false; setActivePowerUp(null); }, 6000); triggerNotification("EXPLOSIVE FIREBALL ACTIVE"); }
+          audio("powerup");
+          setPuCounts(prev => ({ ...prev, [p.type]: (prev[p.type] || 0) + 1 }));
+          
+          if (p.type === "WIDE") { pwRef.current = PW * 1.5; setActivePowerUp("EXPAND"); setTimeout(() => { pwRef.current = PW; setActivePowerUp(null); }, 6000); }
+          else if (p.type === "LIFE") setLives(l => Math.min(l + 1, 6));
+          else if (p.type === "FREEZE" && !frozenRef.current) { frozenRef.current = true; ballsRef.current.forEach(b => { b.vx *= 0.5; b.vy *= 0.5; b.isFrozen = true; }); setActivePowerUp("SLOW BALL"); setTimeout(() => { frozenRef.current = false; ballsRef.current.forEach(b => { b.vx *= 2; b.vy *= 2; b.isFrozen = false; }); setActivePowerUp(null); }, 6000); }
+          else if (p.type === "FIRE") { fireRef.current = true; ballsRef.current.forEach(b => { b.isFire = true; }); setActivePowerUp("FIRE BALL"); setTimeout(() => { fireRef.current = false; ballsRef.current.forEach(b => { b.isFire = false; }); setActivePowerUp(null); }, 6000); }
+          
+          // Çoklu Top (Multiball) Güçlendirici Yakalandığında 2 Yeni Top Fırlatır
+          else if (p.type === "MULTIBALL") {
+            const currentBalls = [...ballsRef.current];
+            const baseBall = currentBalls[0] || { x: pxRef.current + pwRef.current/2, y: H - PH - 15, vx: 1.8, vy: -1.8 };
+            ballsRef.current.push({
+              x: baseBall.x, y: baseBall.y,
+              vx: baseBall.vx + (Math.random() * 0.8 - 0.4) + 0.6,
+              vy: -Math.abs(baseBall.vy),
+              isFire: fireRef.current, isFrozen: frozenRef.current, trail: []
+            });
+            ballsRef.current.push({
+              x: baseBall.x, y: baseBall.y,
+              vx: baseBall.vx - (Math.random() * 0.8 - 0.4) - 0.6,
+              vy: -Math.abs(baseBall.vy),
+              isFire: fireRef.current, isFrozen: frozenRef.current, trail: []
+            });
+            setActivePowerUp("MULTIBALL");
+            setTimeout(() => setActivePowerUp(null), 5000);
+          }
           puRef.current.splice(i, 1);
         } else if (p.y > H) puRef.current.splice(i, 1);
       });
@@ -425,19 +494,33 @@ export default function BrickBreakerMiniApp() {
       const ctx = cv.getContext("2d"); if (!ctx) return;
       ctx.clearRect(0, 0, W, H);
       
+      // Ekran Sallanma Efektini Uygula (Screen Shake)
+      ctx.save();
+      if (shakeRef.current > 0) {
+        const dx = (Math.random() - 0.5) * 5;
+        const dy = (Math.random() - 0.5) * 5;
+        ctx.translate(dx, dy);
+        shakeRef.current--;
+      }
+
+      // Uzay Arka Planı
       const bg = ctx.createLinearGradient(0, 0, W, H);
       bg.addColorStop(0, "#06041a"); bg.addColorStop(0.5, "#0a0828"); bg.addColorStop(1, "#06041a");
       ctx.fillStyle = bg; ctx.fillRect(0, 0, W, H);
+      for (let i = 0; i < 45; i++) { ctx.fillStyle = `rgba(255,255,255,${0.04 + (i % 5) * 0.025})`; ctx.beginPath(); ctx.arc((i * 97 + 30) % W, (i * 71 + 15) % H, i % 5 === 0 ? 1.3 : 0.7, 0, Math.PI * 2); ctx.fill(); }
       
-      ctx.save(); for (let i = 0; i < 45; i++) { ctx.fillStyle = `rgba(255,255,255,${0.04 + (i % 5) * 0.025})`; ctx.beginPath(); ctx.arc((i * 97 + 30) % W, (i * 71 + 15) % H, i % 5 === 0 ? 1.3 : 0.7, 0, Math.PI * 2); ctx.fill(); } ctx.restore();
-      ctx.save(); ctx.strokeStyle = "rgba(120,60,255,0.35)"; ctx.lineWidth = 2; ctx.shadowColor = "#8040ff"; ctx.shadowBlur = 12; ctx.strokeRect(2, 2, W - 4, H - 4); ctx.restore();
+      // Neon Çerçeve border'ı
+      ctx.strokeStyle = "rgba(120,60,255,0.35)"; ctx.lineWidth = 2; ctx.shadowColor = "#8040ff"; ctx.shadowBlur = 12; ctx.strokeRect(2, 2, W - 4, H - 4); ctx.shadowBlur = 0;
+      
       bricksRef.current.forEach(b => drawBrick(ctx, b));
       ptcRef.current.forEach(p => { ctx.save(); ctx.globalAlpha = Math.max(0, p.life); ctx.fillStyle = p.color; ctx.shadowColor = p.color; ctx.shadowBlur = 7; ctx.beginPath(); ctx.roundRect(p.x - p.size / 2, p.y - p.size / 2, p.size, p.size, 2); ctx.fill(); ctx.restore(); });
       
-      const pu_c = { WIDE: "#00d4ff", LIFE: "#ff3070", FREEZE: "#60c0ff", FIRE: "#ff8800" };
-      const pu_l = { WIDE: "E", LIFE: "♥", FREEZE: "❄", FIRE: "F" };
-      puRef.current.forEach(p => { const pc = pu_c[p.type] || "#fff"; ctx.save(); ctx.shadowColor = pc; ctx.shadowBlur = 16; ctx.strokeStyle = pc; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(p.x, p.y, 12, 0, Math.PI * 2); ctx.stroke(); ctx.fillStyle = pc + "38"; ctx.beginPath(); ctx.arc(p.x, p.y, 10, 0, Math.PI * 2); ctx.fill(); shadowBlur = 0; ctx.fillStyle = "#fff"; ctx.font = "bold 9px sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText(pu_l[p.type] || "?", p.x, p.y + 0.5); ctx.restore(); });
+      // Güçlendirici Kapsülleri Çizimi
+      const pu_c = { WIDE: "#00d4ff", LIFE: "#ff3070", FREEZE: "#60c0ff", FIRE: "#ff8800", MULTIBALL: "#00ff66" };
+      const pu_l = { WIDE: "E", LIFE: "♥", FREEZE: "❄", FIRE: "F", MULTIBALL: "M" };
+      puRef.current.forEach(p => { const pc = pu_c[p.type] || "#fff"; ctx.save(); ctx.shadowColor = pc; ctx.shadowBlur = 16; ctx.strokeStyle = pc; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(p.x, p.y, 12, 0, Math.PI * 2); ctx.stroke(); ctx.fillStyle = pc + "38"; ctx.beginPath(); ctx.arc(p.x, p.y, 10, 0, Math.PI * 2); ctx.fill(); ctx.shadowBlur = 0; ctx.fillStyle = "#fff"; ctx.font = "bold 9px sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText(pu_l[p.type] || "?", p.x, p.y + 0.5); ctx.restore(); });
       
+      // Pedal Tasarımı
       const py = H - PH - 5;
       ctx.save(); ctx.shadowColor = "#6060ff"; ctx.shadowBlur = 32;
       const pg = ctx.createLinearGradient(pxRef.current, py, pxRef.current, py + PH);
@@ -449,15 +532,32 @@ export default function BrickBreakerMiniApp() {
       ctx.fillStyle = padShine; ctx.beginPath(); ctx.roundRect(pxRef.current + 4, py + 2.5, pwRef.current - 8, 2.5, 2); ctx.fill();
       ctx.restore();
       
-      let bc = "#ff3070", bg2 = "#ff1050"; if (fireRef.current) { bc = "#ff9000"; bg2 = "#ff6000"; } else if (frozenRef.current) { bc = "#70d0ff"; bg2 = "#40b0ff"; }
-      trailRef.current.forEach((t, i) => { ctx.save(); ctx.globalAlpha = (i / trailRef.current.length) * 0.5; ctx.fillStyle = bc; ctx.beginPath(); ctx.arc(t.x, t.y, BR * (0.3 + i / trailRef.current.length * 0.7), 0, Math.PI * 2); ctx.fill(); ctx.restore(); });
-      ctx.save(); ctx.shadowColor = bg2; ctx.shadowBlur = 32;
-      const bgr = ctx.createRadialGradient(bxRef.current - 2.5, byRef.current - 2.5, 1, bxRef.current, byRef.current, BR);
-      bgr.addColorStop(0, "#fff"); bgr.addColorStop(0.35, bc); bgr.addColorStop(1, bg2);
-      ctx.fillStyle = bgr; ctx.beginPath(); ctx.arc(bxRef.current, byRef.current, BR, 0, Math.PI * 2); ctx.fill();
-      if (fireRef.current || frozenRef.current) { ctx.strokeStyle = fireRef.current ? "rgba(255,160,0,0.7)" : "rgba(96,210,255,0.7)"; ctx.lineWidth = 2.5; ctx.beginPath(); ctx.arc(bxRef.current, byRef.current, BR + 4, 0, Math.PI * 2); ctx.stroke(); }
-      ctx.restore();
-      
+      // Aktif Tüm Topların Eşzamanlı Çizimi ve Efektleri
+      ballsRef.current.forEach(ball => {
+        let bc = "#ff3070", bg2 = "#ff1050"; 
+        if (fireRef.current || ball.isFire) { bc = "#ff9000"; bg2 = "#ff6000"; } 
+        else if (frozenRef.current || ball.isFrozen) { bc = "#70d0ff"; bg2 = "#40b0ff"; }
+        
+        if (ball.trail) {
+          ball.trail.forEach((t, i) => { 
+            ctx.save(); ctx.globalAlpha = (i / ball.trail.length) * 0.5; ctx.fillStyle = bc; 
+            ctx.beginPath(); ctx.arc(t.x, t.y, BR * (0.3 + i / ball.trail.length * 0.7), 0, Math.PI * 2); ctx.fill(); ctx.restore(); 
+          });
+        }
+        
+        ctx.save(); ctx.shadowColor = bg2; ctx.shadowBlur = 32;
+        const bgr = ctx.createRadialGradient(ball.x - 2.5, ball.y - 2.5, 1, ball.x, ball.y, BR);
+        bgr.addColorStop(0, "#fff"); bgr.addColorStop(0.35, bc); bgr.addColorStop(1, bg2);
+        ctx.fillStyle = bgr; ctx.beginPath(); ctx.arc(ball.x, ball.y, BR, 0, Math.PI * 2); ctx.fill();
+        if (fireRef.current || ball.isFire || frozenRef.current || ball.isFrozen) { 
+          ctx.strokeStyle = (fireRef.current || ball.isFire) ? "rgba(255,160,0,0.7)" : "rgba(96,210,255,0.7)"; 
+          ctx.lineWidth = 2.5; ctx.beginPath(); ctx.arc(ball.x, ball.y, BR + 4, 0, Math.PI * 2); ctx.stroke(); 
+        }
+        ctx.restore();
+      });
+
+      ctx.restore(); // Sallantı transform matrisini geri al
+
       if (pausedRef.current) {
         ctx.save(); ctx.fillStyle = "rgba(0,0,0,0.6)"; ctx.fillRect(0, 0, W, H);
         ctx.fillStyle = "#fff"; ctx.font = "bold 28px sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
@@ -474,21 +574,17 @@ export default function BrickBreakerMiniApp() {
     return () => cancelAnimationFrame(aid);
   }, [gameState, audio, level, isPaused]);
 
-  // Input Handlers
   const onMove = (e) => { if (gsRef.current !== "playing" || !canvasRef.current || pausedRef.current) return; const r = canvasRef.current.getBoundingClientRect(); const cx = (e.clientX - r.left) * (W / r.width); pxRef.current = Math.max(0, Math.min(W - pwRef.current, cx - pwRef.current / 2)); };
   const onTouch = (e) => { if (gsRef.current !== "playing" || !canvasRef.current || !e.touches.length || pausedRef.current) return; if (e.cancelable) e.preventDefault(); const r = canvasRef.current.getBoundingClientRect(); const cx = (e.touches[0].clientX - r.left) * (W / r.width); pxRef.current = Math.max(0, Math.min(W - pwRef.current, cx - pwRef.current / 2)); };
-  
-  // Social Configurations
   const wt = (p, ms) => Promise.race([p, new Promise((_, r) => setTimeout(() => r(new Error("t")), ms))]);
   const refCode = address ? address.slice(2, 8).toUpperCase() : "GUEST";
   const shareTxt = () => `Base Brick Breaker'da ${level}. seviyeye ulaşıp ${score} puanla çıtayı buraya koydum.\nAranızda bu skoru geçebilecek bir "Brick Master" var mı? Hodri meydan! 🔥`;
   const refLink = () => { if (typeof window === "undefined") return ""; const u = new URL(window.location.href); u.searchParams.set("ref", refCode); return u.toString(); };
-  
-  const fallback = async () => { try { if (navigator.share) await navigator.share({ text: shareTxt(), url: refLink() }); else { await navigator.clipboard.writeText(`${shareTxt()} ${refLink()}`); triggerNotification("COPIED TO CLIPBOARD! 📋"); } } catch (e) {} };
+  const fallback = async () => { try { if (navigator.share) await navigator.share({ text: shareTxt(), url: refLink() }); else { await navigator.clipboard.writeText(`${shareTxt()} ${refLink()}`); alert("Copied!"); } } catch (e) {} };
   const shareFarcaster = async () => { setShareMenuOpen(false); try { const { sdk } = await import("@farcaster/miniapp-sdk"); const inApp = await wt(sdk.isInMiniApp(), 1000).catch(() => false); if (!inApp) { await fallback(); return; } await wt(sdk.actions.composeCast({ text: shareTxt(), embeds: [refLink()] }), 2000); } catch (e) { await fallback(); } };
   const shareX = async () => { setShareMenuOpen(false); const xu = `https://twitter.com/intent/tweet?text=${encodeURIComponent(shareTxt())}&url=${encodeURIComponent(refLink())}`; try { const { sdk } = await import("@farcaster/miniapp-sdk"); const inApp = await wt(sdk.isInMiniApp(), 1000).catch(() => false); if (!inApp) { window.open(xu, "_blank"); return; } await wt(sdk.actions.openUrl(xu), 1500); } catch (e) { window.open(xu, "_blank"); } };
 
-  if (!isSdkLoaded) return <div style={{ background: "#06041a", color: "#fff", padding: 40, textAlign: "center", borderRadius: 16, minHeight: 200, display: "flex", alignItems: "center", justifyContext: "center" }}>Loading Framework Context...</div>;
+  if (!isSdkLoaded) return <div style={{ background: "#06041a", color: "#fff", padding: 40, textAlign: "center", borderRadius: 16, minHeight: 200, display: "flex", alignItems: "center", justifyContent: "center" }}>Loading...</div>;
 
   const ShareMenu = () => shareMenuOpen ? (
     <div style={{ position: "absolute", bottom: "110%", right: 0, background: "#14103a", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 12, overflow: "hidden", zIndex: 30, minWidth: 145 }}>
@@ -498,22 +594,13 @@ export default function BrickBreakerMiniApp() {
   ) : null;
 
   return (
-    <div style={{ background: "linear-gradient(160deg, #060418 0%, #0c0828 50%, #060418 100%)", borderRadius: 20, overflow: "hidden", maxWidth: 440, margin: "0 auto", fontFamily: "'Arial Black', Arial, sans-serif", position: "relative" }}>
+    <div style={{ background: "linear-gradient(160deg, #060418 0%, #0c0828 50%, #060418 100%)", borderRadius: 20, overflow: "hidden", maxWidth: 440, margin: "0 auto", fontFamily: "'Arial Black', Arial, sans-serif" }}>
 
-      {/* TOP FLOATING NOTIFICATION SYSTEM */}
-      {notification && (
-        <div style={{ position: "absolute", top: 65, left: "50%", transform: "translateX(-50%)", background: "rgba(6, 14, 32, 0.92)", border: "1px solid #00e5ff", color: "#00e5ff", fontSize: 10, fontWeight: "bold", padding: "6px 14px", borderRadius: 20, zIndex: 999, trackingWith: "wider", boxShadow: "0 0 15px rgba(0,229,255,0.35)", textAlign: "center", whiteSpace: "nowrap" }}>
-          {notification}
-        </div>
-      )}
-
-      {/* ===== STATE 1: MAIN MENU ===== */}
+      {/* ===== MENÜ ===== */}
       {gameState === "menu" && (
         <div style={{ position: "relative", minHeight: 640, overflow: "hidden" }}>
           <canvas ref={bgCanvasRef} width={390} height={640} style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none" }} />
           <div style={{ position: "relative", zIndex: 2, display: "flex", flexDirection: "column", alignItems: "center", padding: "18px 20px 20px", gap: 0 }}>
-            
-            {/* Header Module */}
             <div style={{ width: "100%", display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
               <button style={{ width: 38, height: 38, borderRadius: 10, background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.12)", color: "#fff", fontSize: 16, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>☰</button>
               <button onClick={() => isConnected ? disconnect() : (connectors[0] && connect({ connector: connectors[0] }))} style={{ padding: "7px 14px", borderRadius: 20, fontWeight: 700, fontSize: 11, cursor: "pointer", border: "1px solid rgba(0,220,200,0.4)", background: "rgba(0,220,200,0.12)", color: isConnected ? "#00dcc8" : "#80ffee" }}>
@@ -521,14 +608,12 @@ export default function BrickBreakerMiniApp() {
               </button>
             </div>
 
-            {/* Typography Header Title */}
             <div style={{ textAlign: "center", marginBottom: 8 }}>
               <div style={{ color: "#e0e0ff", fontWeight: 900, fontSize: 22, letterSpacing: 2, textShadow: "0 0 20px rgba(180,160,255,0.6)" }}>BASE BRICK</div>
-              <div style={{ fontWeight: 900, fontSize: 44, letterSpacing: 3, background: "linear-gradient(135deg, #ff80ff 0%, #c040ff 40%, #6040ff 100%)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", lineHeight: 1 }}>BREAKER</div>
+              <div style={{ fontWeight: 900, fontSize: 44, letterSpacing: 3, background: "linear-gradient(135deg, #ff80ff 0%, #c040ff 40%, #6040ff 100%)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", lineHeight: 1, textShadow: "none" }}>BREAKER</div>
               <div style={{ color: "#8080c0", fontSize: 10, fontWeight: 700, letterSpacing: 3, marginTop: 4 }}>CLASSIC ARCADE EDITION</div>
             </div>
 
-            {/* Main Interactive Visual Element */}
             <div style={{ position: "relative", width: 260, height: 180, display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 16 }}>
               <div style={{ position: "absolute", bottom: 42, left: "50%", transform: "translateX(-50%)", width: 180, height: 30, background: "radial-gradient(ellipse, rgba(120,80,255,0.5) 0%, transparent 70%)", filter: "blur(8px)" }} />
               <div style={{ position: "absolute", bottom: 62, left: "50%", transform: "translateX(-50%)", width: 2, height: 100, background: "linear-gradient(180deg, rgba(150,100,255,0.8) 0%, transparent 100%)", boxShadow: "0 0 12px #8050ff" }} />
@@ -540,7 +625,6 @@ export default function BrickBreakerMiniApp() {
               </div>
             </div>
 
-            {/* Game Mode Configuration Toggles */}
             <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
               {["tournament", "practice"].map(m => (
                 <button key={m} onClick={() => setGameMode(m)} style={{ padding: "6px 14px", borderRadius: 8, fontSize: 10, fontWeight: 700, cursor: "pointer", border: `1px solid ${gameMode === m ? "rgba(120,80,255,0.6)" : "rgba(255,255,255,0.12)"}`, background: gameMode === m ? "rgba(120,80,255,0.22)" : "rgba(255,255,255,0.05)", color: gameMode === m ? "#c0a0ff" : "#606090" }}>
@@ -550,15 +634,13 @@ export default function BrickBreakerMiniApp() {
             </div>
             {gameMode === "tournament" && <div style={{ color: "#ff8040", fontSize: 9, fontWeight: 700, marginBottom: 10 }}>0.00001 ETH per game on Base</div>}
 
-            {/* PLAY ACTION BUTTON TRIGGER */}
-            <button onClick={() => setShowConfirmOverlay(true)} disabled={isPaying} style={{ width: "100%", padding: "17px", borderRadius: 16, fontWeight: 900, fontSize: 18, letterSpacing: 2, cursor: "pointer", border: "none", background: "linear-gradient(135deg, #ff2060 0%, #cc2090 40%, #8020c0 100%)", color: "#fff", boxShadow: "0 0 30px rgba(200,40,150,0.55), 0 4px 20px rgba(0,0,0,0.4)", display: "flex", alignItems: "center", justifyContent: "center", gap: 10, marginBottom: 12 }}>
-              <span style={{ fontSize: 20 }}>▶</span>PLAY NOW
+            <button onClick={startGame} disabled={isPaying} style={{ width: "100%", padding: "17px", borderRadius: 16, fontWeight: 900, fontSize: 18, letterSpacing: 2, cursor: isPaying ? "not-allowed" : "pointer", border: "none", background: "linear-gradient(135deg, #ff2060 0%, #cc2090 40%, #8020c0 100%)", color: "#fff", boxShadow: "0 0 30px rgba(200,40,150,0.55), 0 4px 20px rgba(0,0,0,0.4)", opacity: isPaying ? 0.65 : 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 10, marginBottom: 12 }}>
+              <span style={{ fontSize: 20 }}>▶</span>{isPaying ? "CONFIRMING..." : "PLAY NOW"}
             </button>
             {paymentError && <div style={{ color: "#ff5060", fontSize: 10, textAlign: "center", marginTop: -6, marginBottom: 6 }}>{paymentError}</div>}
 
-            {/* Secondary Navigation Options Grid */}
             <div style={{ width: "100%", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>
-              <button onClick={() => setGameMode("tournament")} style={{ padding: "13px 8px", borderRadius: 14, fontWeight: 700, fontSize: 12, cursor: "pointer", border: "1px solid rgba(200,140,40,0.4)", background: "rgba(180,120,20,0.18)", color: "#ffcc44", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
+              <button onClick={() => setGameMode(m => m)} style={{ padding: "13px 8px", borderRadius: 14, fontWeight: 700, fontSize: 12, cursor: "pointer", border: "1px solid rgba(200,140,40,0.4)", background: "rgba(180,120,20,0.18)", color: "#ffcc44", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
                 🏆 TOURNAMENT
               </button>
               <button onClick={openLB} style={{ padding: "13px 8px", borderRadius: 14, fontWeight: 700, fontSize: 12, cursor: "pointer", border: "1px solid rgba(60,120,255,0.4)", background: "rgba(40,80,220,0.18)", color: "#6090ff", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
@@ -574,48 +656,23 @@ export default function BrickBreakerMiniApp() {
               </button>
             </div>
           </div>
-
-          {/* NATIVE INTEGRATED VERIFICATION CONFIRMATION OVERLAY */}
-          {showConfirmOverlay && (
-            <div style={{ position: "absolute", inset: 0, backgroundColor: "rgba(6, 8, 20, 0.96)", backdropFilter: "blur(8px)", zIndex: 999, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 20 }}>
-              <div style={{ backgroundColor: "#0f1326", border: "1px solid #262f59", padding: "30px 24px", borderRadius: 24, maxWidth: 320, width: "100%", textAlign: "center", boxShadow: "0 0 40px rgba(0,0,0,0.8)" }}>
-                <h3 style={{ fontSize: 18, fontWeight: 900, color: "#00e5ff", marginBottom: 8, letterSpacing: 1 }}>CONFIRM START</h3>
-                <p style={{ color: "#a0a5c0", fontSize: 11, marginBottom: 20, fontFamily: "sans-serif", lineHeight: "1.4" }}>
-                  You are opening a live secure transaction node session on the active network.
-                </p>
-                <div style={{ backgroundColor: "#161b36", padding: 10, borderRadius: 12, marginBottom: 24, border: "1px solid #222a4f", fontFamily: "monospace", fontSize: 10, color: "#10b981", wordBreak: "break-all" }}>
-                  Node Account: {isConnected ? address : "Not Connected"}
-                </div>
-                <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                  <button onClick={verifyAndStartMatch} disabled={isPaying} style={{ width: "100%", padding: "12px", borderRadius: 12, border: "none", background: "linear-gradient(135deg, #10b981, #059669)", color: "#fff", fontWeight: "bold", fontSize: 12, letterSpacing: 1, cursor: "pointer" }}>
-                    {isPaying ? "PROCESSING..." : "CONFIRM & LAUNCH"}
-                  </button>
-                  <button onClick={() => setShowConfirmOverlay(false)} style={{ background: "none", border: "none", color: "#8085a0", fontSize: 11, cursor: "pointer", padding: "6px 0" }}>
-                    CANCEL
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
         </div>
       )}
 
-      {/* ===== STATE 2: ACTIVE GAME INTERFACE ===== */}
+      {/* ===== OYUN EKRANI ===== */}
       {(gameState === "playing" || gameState === "gameover") && (
         <div style={{ display: "flex", flexDirection: "column" }}>
-          
-          {/* Header Metadata HUD */}
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 14px 8px", borderBottom: "1px solid rgba(255,255,255,0.07)" }}>
             <div>
               <div style={{ color: "#c0c0ff", fontWeight: 900, fontSize: 13, letterSpacing: 1.5 }}>BASE BRICK</div>
               <div style={{ fontWeight: 900, fontSize: 16, background: "linear-gradient(135deg, #ff80ff, #8040ff)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", letterSpacing: 1 }}>BREAKER</div>
+              <div style={{ color: "#504070", fontSize: 8, fontWeight: 700, letterSpacing: 2 }}>CLASSIC ARCADE EDITION</div>
             </div>
             <button onClick={() => isConnected ? disconnect() : (connectors[0] && connect({ connector: connectors[0] }))} style={{ padding: "5px 10px", borderRadius: 20, fontWeight: 700, fontSize: 11, cursor: "pointer", border: "1px solid rgba(0,220,200,0.35)", background: "rgba(0,220,200,0.1)", color: "#00dcc8" }}>
               {isConnected ? `${address.slice(0, 4)}...${address.slice(-4)}` : "Connect"}
             </button>
           </div>
 
-          {/* High Score Metrics Indicators Bar */}
           <div style={{ display: "flex", justifyContent: "space-around", alignItems: "center", padding: "8px 14px", background: "rgba(0,0,0,0.38)", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
             <div style={{ textAlign: "center" }}><div style={{ color: "#504070", fontSize: 9, fontWeight: 700, letterSpacing: 1.5 }}>SCORE</div><div style={{ color: "#00e5ff", fontWeight: 900, fontSize: 16 }}>{score.toLocaleString()}</div></div>
             <div style={{ width: 1, height: 28, background: "rgba(255,255,255,0.08)" }} />
@@ -624,17 +681,14 @@ export default function BrickBreakerMiniApp() {
             <div style={{ textAlign: "center" }}><div style={{ color: "#504070", fontSize: 9, fontWeight: 700, letterSpacing: 1.5 }}>LEVEL</div><div style={{ color: "#b060ff", fontWeight: 900, fontSize: 16 }}>{level}</div></div>
           </div>
 
-          {/* Active Interactive Canvas Viewport */}
           <div style={{ position: "relative" }}>
             <canvas ref={canvasRef} width={W} height={H} onPointerMove={onMove} onTouchMove={onTouch} onTouchStart={onTouch} style={{ width: "100%", display: "block", touchAction: "none", cursor: "crosshair" }} />
             
-            {/* Combo Notification */}
-            {showCombo && combo > 1 && <div style={{ position: "absolute", top: 10, left: "50%", transform: "translateX(-50%)", color: "#ffd000", fontWeight: 900, fontSize: 16, textShadow: "0 0 14px #ffd000", pointerEvents: "none", whiteSpace: "nowrap" }}>x{combo} COMBO! 🔥</div>}
+            {/* Combo Göstergesi */}
+            {showCombo && combo > 1 && <div style={{ position: "absolute", top: 10, left: "50%", transform: "translateX(-50%)", color: "#ffd000", fontWeight: 900, fontSize: 17, textShadow: "0 0 14px #ffd000", pointerEvents: "none", whiteSpace: "nowrap" }}>x{combo} COMBO! 🔥</div>}
             
-            {/* Active Buff State Badge */}
             {activePowerUp && <div style={{ position: "absolute", top: 8, left: 8, background: "rgba(0,200,255,0.16)", border: "1px solid rgba(0,200,255,0.4)", borderRadius: 8, padding: "3px 8px", color: "#00e5ff", fontSize: 9, fontWeight: 700 }}>{activePowerUp} ACTIVE</div>}
             
-            {/* Action Session Overlay Modifiers */}
             <button onClick={() => setIsPaused(p => !p)} style={{ position: "absolute", bottom: 10, left: 10, width: 36, height: 36, borderRadius: "50%", background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.2)", color: "#fff", cursor: "pointer", fontSize: 14, display: "flex", alignItems: "center", justifyContent: "center" }}>
               {isPaused ? "▶" : "⏸"}
             </button>
@@ -642,12 +696,11 @@ export default function BrickBreakerMiniApp() {
               ⚡
             </button>
 
-            {/* Game Over Action Board View overlay */}
+            {/* Game Over Overlay */}
             {gameState === "gameover" && (
               <div style={{ position: "absolute", inset: 0, background: "rgba(4,2,20,0.92)", backdropFilter: "blur(6px)", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 14, padding: 24 }}>
-                <div style={{ fontWeight: 900, fontSize: 40, letterSpacing: 3, background: "linear-gradient(135deg, #ff4060, #ff8000)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>GAME OVER</div>
+                <div style={{ fontWeight: 900, fontSize: 40, letterSpacing: 3, background: "linear-gradient(135deg, #ff4060, #ff8000)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", textShadow: "none" }}>GAME OVER</div>
                 {isNewHigh && <div style={{ color: "#ffd000", fontWeight: 700, fontSize: 14, letterSpacing: 1 }}>🌟 NEW HIGH SCORE!</div>}
-                
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 0, background: "rgba(255,255,255,0.06)", borderRadius: 18, padding: "16px 12px", border: "1px solid rgba(255,255,255,0.1)", width: "100%" }}>
                   {[{ l: "SCORE", v: score.toLocaleString(), c: "#fff" }, { l: "BEST SCORE", v: Math.max(score, bestScore).toLocaleString(), c: "#ffd000" }, { l: "LEVEL", v: level, c: "#b060ff" }].map((s, i) => (
                     <div key={s.l} style={{ textAlign: "center", padding: "4px 0", borderLeft: i > 0 ? "1px solid rgba(255,255,255,0.08)" : "none" }}>
@@ -656,12 +709,11 @@ export default function BrickBreakerMiniApp() {
                     </div>
                   ))}
                 </div>
-                
                 <div style={{ display: "flex", gap: 16, marginTop: 6, alignItems: "center" }}>
                   <button onClick={() => setGameState("menu")} style={{ width: 62, height: 62, borderRadius: "50%", background: "rgba(255,255,255,0.09)", border: "1px solid rgba(255,255,255,0.18)", color: "#fff", cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: 700, gap: 2 }}>
                     <span style={{ fontSize: 22 }}>🏠</span>HOME
                   </button>
-                  <button onClick={() => setShowConfirmOverlay(true)} disabled={isPaying} style={{ width: 82, height: 82, borderRadius: "50%", background: "linear-gradient(135deg, #c060ff, #8030ff)", border: "2px solid rgba(220,150,255,0.6)", color: "#fff", cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 900, gap: 2, boxShadow: "0 0 30px rgba(180,80,255,0.75)" }}>
+                  <button onClick={startGame} disabled={isPaying} style={{ width: 82, height: 82, borderRadius: "50%", background: "linear-gradient(135deg, #c060ff, #8030ff)", border: "2px solid rgba(220,150,255,0.6)", color: "#fff", cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 900, gap: 2, boxShadow: "0 0 30px rgba(180,80,255,0.75), 0 0 60px rgba(150,50,255,0.3), inset 0 1px 2px rgba(255,255,255,0.3)", opacity: isPaying ? 0.65 : 1 }}>
                     <span style={{ fontSize: 26 }}>↺</span>RETRY
                   </button>
                   <div style={{ position: "relative" }}>
@@ -676,25 +728,26 @@ export default function BrickBreakerMiniApp() {
             )}
           </div>
 
-          {/* Power-ups Horizontal Dashboard Bar */}
-          <div style={{ background: "linear-gradient(180deg, #0c0828 0%, #100c30 100%)", borderTop: "1px solid rgba(120,80,255,0.25)", padding: "10px 16px" }}>
+          {/* Geliştirilmiş Power-ups Paneli (Multiball Dahil) */}
+          <div style={{ background: "linear-gradient(180deg, #0c0828 0%, #100c30 100%)", borderTop: "1px solid rgba(120,80,255,0.25)", padding: "10px 12px" }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-              <div style={{ color: "#5040a0", fontSize: 9, fontWeight: 700, letterSpacing: 2 }}>POWER-UPS</div>
-              <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+              <div style={{ color: "#5040a0", fontSize: 9, fontWeight: 700, letterSpacing: 1.5 }}>POWER-UPS</div>
+              <div style={{ display: "flex", gap: 7, alignItems: "center" }}>
                 {[
                   { k: "WIDE", ic: "↔", lb: "EXPAND", c: "#00d4ff", bg: "rgba(0,212,255,0.15)", border: "rgba(0,212,255,0.45)" },
                   { k: "FIRE", ic: "🔥", lb: "FIRE", c: "#ff9000", bg: "rgba(255,144,0,0.15)", border: "rgba(255,144,0,0.45)" },
-                  { k: "LIFE", ic: "❤️", lb: "EXTRA LIFE", c: "#ff3070", bg: "rgba(255,48,112,0.15)", border: "rgba(255,48,112,0.45)" },
-                  { k: "FREEZE", ic: "❄️", lb: "SLOW BALL", c: "#60c8ff", bg: "rgba(96,200,255,0.15)", border: "rgba(96,200,255,0.45)" },
+                  { k: "MULTIBALL", ic: "⚾", lb: "MULTI", c: "#00ff66", bg: "rgba(0,255,102,0.15)", border: "rgba(0,255,102,0.45)" },
+                  { k: "LIFE", ic: "❤️", lb: "LIFE", c: "#ff3070", bg: "rgba(255,48,112,0.15)", border: "rgba(255,48,112,0.45)" },
+                  { k: "FREEZE", ic: "❄️", lb: "SLOW", c: "#60c8ff", bg: "rgba(96,200,255,0.15)", border: "rgba(96,200,255,0.45)" },
                 ].map(pu => {
                   const active = puCounts[pu.k] > 0;
                   return (
                     <div key={pu.k} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 3 }}>
-                      <div style={{ width: 40, height: 40, borderRadius: 11, background: active ? pu.bg : "rgba(255,255,255,0.04)", border: `1.5px solid ${active ? pu.border : "rgba(255,255,255,0.08)"}`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18, opacity: active ? 1 : 0.35, boxShadow: active ? `0 0 12px ${pu.c}40` : "none" }}>
+                      <div style={{ width: 36, height: 36, borderRadius: 10, background: active ? pu.bg : "rgba(255,255,255,0.04)", border: `1.5px solid ${active ? pu.border : "rgba(255,255,255,0.08)"}`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, opacity: active ? 1 : 0.35, boxShadow: active ? `0 0 12px ${pu.c}40` : "none" }}>
                         {pu.ic}
                       </div>
                       <div style={{ color: active ? pu.c : "#3a2060", fontSize: 11, fontWeight: 900 }}>{puCounts[pu.k]}</div>
-                      <div style={{ color: "#3a2060", fontSize: 7, letterSpacing: 0.3, whiteSpace: "nowrap" }}>{pu.lb}</div>
+                      <div style={{ color: "#3a2060", fontSize: 7, letterSpacing: 0.2, whiteSpace: "nowrap" }}>{pu.lb}</div>
                     </div>
                   );
                 })}
@@ -705,14 +758,13 @@ export default function BrickBreakerMiniApp() {
         </div>
       )}
 
-      {/* ===== STATE 3: LEVEL UP METRICS SCREEN ===== */}
+      {/* ===== LEVEL UP ===== */}
       {gameState === "levelup" && (
         <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "45px 22px", gap: 18, minHeight: 600, background: "linear-gradient(180deg, #06001e 0%, #18006a 50%, #06001e 100%)" }}>
-          <div style={{ fontWeight: 900, fontSize: 40, letterSpacing: 3, color: "#e060ff", textShadow: "0 0 40px #c040ff" }}>LEVEL UP!</div>
+          <div style={{ fontWeight: 900, fontSize: 40, letterSpacing: 3, color: "#e060ff", textShadow: "0 0 40px #c040ff, 0 0 80px rgba(200,64,255,0.4)" }}>LEVEL UP!</div>
           <div style={{ color: "#8090b0", fontWeight: 700, fontSize: 13, letterSpacing: 3 }}>YOU REACHED</div>
-          <div style={{ fontWeight: 900, fontSize: 56, color: "#00d4ff" }}>LEVEL {level}</div>
-          <div style={{ width: 78, height: 78, borderRadius: "50%", background: "radial-gradient(circle at 32% 28%, #fff, #c060ff)", boxShadow: "0 0 55px #8040ff", margin: "8px 0" }} />
-          
+          <div style={{ fontWeight: 900, fontSize: 56, color: "#00d4ff", textShadow: "0 0 35px #00b0ff" }}>LEVEL {level}</div>
+          <div style={{ width: 78, height: 78, borderRadius: "50%", background: "radial-gradient(circle at 32% 28%, #fff, #c060ff)", boxShadow: "0 0 55px #8040ff, 0 0 110px rgba(128,64,255,0.45)", margin: "8px 0" }} />
           <div style={{ width: "100%", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
             {[{ l: "SCORE", v: score.toLocaleString(), c: "#fff" }, { l: "XP GAINED", v: `+${xpGained} XP`, c: "#a070ff" }].map(s => (
               <div key={s.l} style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 18, padding: 18, textAlign: "center" }}>
@@ -721,12 +773,12 @@ export default function BrickBreakerMiniApp() {
               </div>
             ))}
           </div>
-          <button onClick={doNextLevel} style={{ width: "100%", padding: 18, borderRadius: 18, fontWeight: 900, fontSize: 17, letterSpacing: 2, cursor: "pointer", border: "none", background: "linear-gradient(135deg, #8040ff, #5020c0)", color: "#fff" }}>▶  NEXT LEVEL</button>
+          <button onClick={doNextLevel} style={{ width: "100%", padding: 18, borderRadius: 18, fontWeight: 900, fontSize: 17, letterSpacing: 2, cursor: "pointer", border: "none", background: "linear-gradient(135deg, #8040ff, #5020c0)", color: "#fff", boxShadow: "0 0 35px rgba(120,64,255,0.55)" }}>▶  NEXT LEVEL</button>
           <button onClick={openLB} style={{ width: "100%", padding: 14, borderRadius: 16, fontWeight: 700, fontSize: 12, letterSpacing: 1.5, cursor: "pointer", border: "1px solid rgba(255,200,0,0.3)", background: "rgba(255,200,0,0.09)", color: "#ffd000" }}>🏆 LEADERBOARD</button>
         </div>
       )}
 
-      {/* ===== STATE 4: GLOBAL SECURE LEADERBOARD ===== */}
+      {/* ===== LEADERBOARD ===== */}
       {gameState === "leaderboard" && (
         <div style={{ minHeight: 600, display: "flex", flexDirection: "column" }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 16px", borderBottom: "1px solid rgba(255,255,255,0.07)" }}>
@@ -734,15 +786,13 @@ export default function BrickBreakerMiniApp() {
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}><span style={{ fontSize: 22 }}>🏆</span><span style={{ color: "#fff", fontWeight: 900, fontSize: 17, letterSpacing: 1.5 }}>LEADERBOARD</span></div>
             {isConnected ? <span style={{ color: "#e060ff", fontSize: 10, fontWeight: 700 }}>{address.slice(0, 4)}...{address.slice(-4)}</span> : <span />}
           </div>
-          
           <div style={{ display: "flex", gap: 6, padding: "10px 16px 8px" }}>
             {["GLOBAL", "FRIENDS", "TOURNAMENT"].map((t, i) => (
               <button key={t} style={{ padding: "7px 12px", borderRadius: 9, fontWeight: 700, fontSize: 10, cursor: "pointer", border: "none", background: i === 0 ? "#7040ff" : "rgba(255,255,255,0.05)", color: i === 0 ? "#fff" : "#504080" }}>{t}</button>
             ))}
           </div>
-          
           <div style={{ padding: "4px 16px", display: "flex", flexDirection: "column", gap: 7, flex: 1, overflowY: "auto", maxHeight: 360 }}>
-            {leaderboardLoading ? <div style={{ color: "#504080", textAlign: "center", padding: 30 }}>Loading Leaderboard Entries...</div>
+            {leaderboardLoading ? <div style={{ color: "#504080", textAlign: "center", padding: 30 }}>Loading...</div>
               : leaderboardRows.length === 0 ? <div style={{ color: "#504080", textAlign: "center", padding: 30, fontSize: 12 }}>No scores yet. Be the first!</div>
               : leaderboardRows.map((row, idx) => {
                 const isMe = address && row.wallet_address?.toLowerCase() === address.toLowerCase();
@@ -766,7 +816,6 @@ export default function BrickBreakerMiniApp() {
                 );
               })}
           </div>
-          
           {address && leaderboardRows.length > 0 && !leaderboardRows.some(r => r.wallet_address?.toLowerCase() === address.toLowerCase()) && (
             <div style={{ margin: "0 16px 8px", padding: "10px 12px", borderRadius: 14, background: "rgba(120,60,255,0.12)", border: "1px solid rgba(120,60,255,0.28)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
               <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -777,10 +826,9 @@ export default function BrickBreakerMiniApp() {
               <div style={{ color: "#b070ff", fontWeight: 900, fontSize: 14 }}>{score > 0 ? score.toLocaleString() : "—"}</div>
             </div>
           )}
-          <div style={{ textAlign: "center", padding: "6px 0 10px", color: "#403060", fontSize: 9 }}>⏱ SEASON ENDS IN: 6D 14H 32M</div>
-          
+          <div style={{ textAlign: "center", padding: "6px 0 10px", color: "#403060", fontSize: 9, display: "flex", alignItems: "center", justifyContent: "center", gap: 4 }}>⏱ SEASON ENDS IN: 6D 14H 32M</div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, padding: "0 16px 16px" }}>
-            <button onClick={() => setShowConfirmOverlay(true)} disabled={isPaying} style={{ padding: 14, borderRadius: 16, fontWeight: 900, fontSize: 13, letterSpacing: 1, cursor: "pointer", border: "none", background: "linear-gradient(135deg, #e060ff, #a040ff)", color: "#fff" }}>
+            <button onClick={startGame} disabled={isPaying} style={{ padding: 14, borderRadius: 16, fontWeight: 900, fontSize: 13, letterSpacing: 1, cursor: "pointer", border: "none", background: "linear-gradient(135deg, #e060ff, #a040ff)", color: "#fff", boxShadow: "0 0 20px rgba(200,64,255,0.4)", opacity: isPaying ? 0.6 : 1 }}>
               {isPaying ? "..." : "▶ PLAY AGAIN"}
             </button>
             <div style={{ position: "relative" }}>
