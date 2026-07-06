@@ -54,6 +54,8 @@ export default function BrickBreakerMiniApp() {
   const [isNewHigh, setIsNewHigh] = useState(false);
   const [puCounts, setPuCounts] = useState({ WIDE: 0, FIRE: 0, LIFE: 0, FREEZE: 0 });
   const [prevState, setPrevState] = useState("menu");
+  const [isPaused, setIsPaused] = useState(false);
+  const pausedRef = useRef(false);
 
   const scoreRef = useRef(0);
   const levelRef = useRef(1);
@@ -73,18 +75,59 @@ export default function BrickBreakerMiniApp() {
   const ptcRef = useRef([]);
   const comboRef = useRef(0);
   const bestRef = useRef(0);
+  const bgMusicRef = useRef(null);
 
   useEffect(() => { scoreRef.current = score; }, [score]);
   useEffect(() => { levelRef.current = level; }, [level]);
   useEffect(() => { livesRef.current = lives; }, [lives]);
   useEffect(() => { gsRef.current = gameState; }, [gameState]);
   useEffect(() => { bestRef.current = bestScore; }, [bestScore]);
+  useEffect(() => { pausedRef.current = isPaused; }, [isPaused]);
   useEffect(() => { const req = playerLv * 100; if (playerXp >= req) { setPlayerLv(l => l + 1); setPlayerXp(x => x - req); } }, [playerXp, playerLv]);
   useEffect(() => { const init = async () => { try { const { sdk } = await import("@farcaster/miniapp-sdk"); if (sdk) { await sdk.actions.init(); setIsSdkLoaded(true); await sdk.actions.ready(); } } catch (e) { setIsSdkLoaded(true); } }; init(); }, []);
 
+  // Background music for menu
+  useEffect(() => {
+    const startBgMusic = () => {
+      try {
+        const A = window.AudioContext || window.webkitAudioContext;
+        if (!A) return null;
+        const ctx = new A();
+        const masterGain = ctx.createGain();
+        masterGain.gain.setValueAtTime(0.025, ctx.currentTime);
+        masterGain.connect(ctx.destination);
+        const freqs = [220, 277.18, 329.63, 440];
+        const oscillators = freqs.map((freq, i) => {
+          const osc = ctx.createOscillator();
+          osc.type = ["sine", "triangle", "sine", "sine"][i % 4];
+          osc.frequency.setValueAtTime(freq, ctx.currentTime);
+          const g = ctx.createGain();
+          g.gain.setValueAtTime(0.015 - i * 0.002, ctx.currentTime);
+          osc.connect(g);
+          g.connect(masterGain);
+          osc.start();
+          return osc;
+        });
+        return { ctx, oscillators };
+      } catch (e) { return null; }
+    };
+    if (gameState === "menu" && !isMuted) {
+      if (!bgMusicRef.current) bgMusicRef.current = startBgMusic();
+    } else if (bgMusicRef.current) {
+      try { bgMusicRef.current.ctx.close(); } catch (e) {}
+      bgMusicRef.current = null;
+    }
+    return () => {
+      if (bgMusicRef.current) {
+        try { bgMusicRef.current.ctx.close(); } catch (e) {}
+        bgMusicRef.current = null;
+      }
+    };
+  }, [gameState, isMuted]);
+
   const audio = useCallback((t) => {
     if (isMuted) return;
-    try { const A = window.AudioContext || window.webkitAudioContext; if (!A) return; const c = new A(), o = c.createOscillator(), g = c.createGain(); o.connect(g); g.connect(c.destination); const freqs = { hit: 180, brick: 380, lose: 100, powerup: 520, levelup: 700 }; o.frequency.setValueAtTime(freqs[t] || 300, c.currentTime); g.gain.setValueAtTime(0.05, c.currentTime); o.start(); o.stop(c.currentTime + (t === "lose" ? 0.4 : t === "levelup" ? 0.4 : 0.08)); } catch (e) {}
+    try { const A = window.AudioContext || window.webkitAudioContext; if (!A) return; const c = new A(), o = c.createOscillator(), g = c.createGain(); o.connect(g); g.connect(c.destination); const freqs = { hit: 180, brick: 380, lose: 100, powerup: 520, levelup: 700 }; o.frequency.setValueAtTime(freqs[t] || 300, c.currentTime);       const vol = { hit: 0.08, brick: 0.25, lose: 0.15, powerup: 0.12, levelup: 0.15 }; g.gain.setValueAtTime(vol[t] || 0.08, c.currentTime); o.start(); o.stop(c.currentTime + (t === "lose" ? 0.4 : t === "levelup" ? 0.4 : 0.08)); } catch (e) {}
   }, [isMuted]);
 
   const submitScore = useCallback(async (s, l) => {
@@ -177,7 +220,7 @@ export default function BrickBreakerMiniApp() {
     };
 
     const update = () => {
-      if (gsRef.current !== "playing") return;
+      if (gsRef.current !== "playing" || pausedRef.current) return;
       bxRef.current += vxRef.current; byRef.current += vyRef.current;
       trailRef.current.push({ x: bxRef.current, y: byRef.current }); if (trailRef.current.length > 12) trailRef.current.shift();
       if (bxRef.current + BR > W || bxRef.current - BR < 0) { vxRef.current = -vxRef.current; audio("hit"); }
@@ -351,9 +394,14 @@ export default function BrickBreakerMiniApp() {
         <div>
           <div style={C.hdr}>
             <div><div style={{ ...C.t1, fontSize: 13 }}>BASE BRICK</div><div style={{ ...C.t2, fontSize: 14 }}>BREAKER</div></div>
-            <button style={C.wb(isConnected)} onClick={() => isConnected ? disconnect() : (connectors[0] && connect({ connector: connectors[0] }))}>
-              {isConnected ? `${address.slice(0, 4)}...${address.slice(-4)}` : "Connect"}
-            </button>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <button onClick={() => setIsPaused(p => !p)} style={{ background: "none", border: "none", fontSize: 18, cursor: "pointer", color: "#fff", opacity: 0.7 }}>
+                {isPaused ? "▶" : "⏸"}
+              </button>
+              <button style={C.wb(isConnected)} onClick={() => isConnected ? disconnect() : (connectors[0] && connect({ connector: connectors[0] }))}>
+                {isConnected ? `${address.slice(0, 4)}...${address.slice(-4)}` : "Connect"}
+              </button>
+            </div>
           </div>
 
           <div style={C.sb}>
@@ -369,24 +417,33 @@ export default function BrickBreakerMiniApp() {
             {showCombo && combo > 1 && <div style={{ position: "absolute", top: 10, left: "50%", transform: "translateX(-50%)", color: "#ffd000", fontWeight: 900, fontSize: 15, textShadow: "0 0 12px #ffd000", pointerEvents: "none", whiteSpace: "nowrap" }}>x{combo} COMBO! 🔥</div>}
             {activePowerUp && <div style={{ position: "absolute", top: 8, left: 8, background: "rgba(0,200,255,0.18)", border: "1px solid rgba(0,200,255,0.45)", borderRadius: 8, padding: "3px 8px", color: "#00e5ff", fontSize: 9, fontWeight: 700 }}>{activePowerUp} ACTIVE</div>}
 
+            {isPaused && (
+              <div style={{ position: "absolute", inset: 0, background: "rgba(0,0,0,0.75)", backdropFilter: "blur(4px)", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 12 }}>
+                <div style={{ fontWeight: 900, fontSize: 36, letterSpacing: 4, color: "#fff", textShadow: "0 0 30px rgba(120,80,255,0.8)" }}>PAUSED</div>
+                <button onClick={() => setIsPaused(false)} style={{ padding: "14px 32px", borderRadius: 14, background: "linear-gradient(135deg, #7040ff, #4020b0)", border: "none", color: "#fff", fontWeight: 900, fontSize: 14, cursor: "pointer", boxShadow: "0 0 30px rgba(120,64,255,0.5)" }}>
+                  ▶  RESUME
+                </button>
+              </div>
+            )}
+
             {gameState === "gameover" && (
-              <div style={{ position: "absolute", inset: 0, background: "rgba(0,0,0,0.88)", backdropFilter: "blur(5px)", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 12 }}>
-                <div style={{ fontWeight: 900, fontSize: 34, letterSpacing: 3, background: "linear-gradient(135deg, #ff2d78, #ff8800)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>GAME OVER</div>
-                {isNewHigh && <div style={{ color: "#ffd000", fontWeight: 700, fontSize: 13, letterSpacing: 1 }}>🌟 NEW HIGH SCORE!</div>}
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, background: "rgba(255,255,255,0.05)", borderRadius: 16, padding: "14px 16px", border: "1px solid rgba(255,255,255,0.09)" }}>
-                  {[{ l: "SCORE", v: score, c: "#fff" }, { l: "BEST SCORE", v: Math.max(score, bestScore), c: "#ffd000" }, { l: "LEVEL", v: level, c: "#b060ff" }].map(s => (
-                    <div key={s.l} style={{ textAlign: "center" }}><div style={C.lbl}>{s.l}</div><div style={{ color: s.c, fontWeight: 900, fontSize: 18 }}>{s.v.toLocaleString()}</div></div>
+              <div style={{ position: "absolute", inset: 0, background: "rgba(0,0,0,0.88)", backdropFilter: "blur(5px)", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 14 }}>
+                <div style={{ fontWeight: 900, fontSize: 40, letterSpacing: 4, background: "linear-gradient(135deg, #ff2d78, #ff8800)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", textShadow: "0 0 40px rgba(255,45,120,0.3)" }}>GAME OVER</div>
+                {isNewHigh && <div style={{ color: "#ffd000", fontWeight: 700, fontSize: 14, letterSpacing: 1, textShadow: "0 0 20px rgba(255,200,0,0.5)" }}>🌟 NEW HIGH SCORE!</div>}
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, background: "rgba(255,255,255,0.06)", borderRadius: 18, padding: "16px 20px", border: "1px solid rgba(255,255,255,0.12)" }}>
+                  {[{ l: "SCORE", v: score, c: "#fff" }, { l: "BEST", v: Math.max(score, bestScore), c: "#ffd000" }, { l: "LEVEL", v: level, c: "#b060ff" }].map(s => (
+                    <div key={s.l} style={{ textAlign: "center" }}><div style={C.lbl}>{s.l}</div><div style={{ color: s.c, fontWeight: 900, fontSize: 20, textShadow: `0 0 12px ${s.c}40` }}>{s.v.toLocaleString()}</div></div>
                   ))}
                 </div>
-                <div style={{ display: "flex", gap: 12, marginTop: 4, alignItems: "center" }}>
-                  <button onClick={() => setGameState("menu")} style={{ padding: "12px 14px", borderRadius: "50%", background: "rgba(255,255,255,0.09)", border: "1px solid rgba(255,255,255,0.15)", color: "#fff", cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", fontSize: 9, fontWeight: 700, gap: 3 }}>
+                <div style={{ display: "flex", gap: 16, marginTop: 6, alignItems: "center" }}>
+                  <button onClick={() => setGameState("menu")} style={{ padding: "14px 16px", borderRadius: "50%", background: "rgba(255,255,255,0.09)", border: "1px solid rgba(255,255,255,0.15)", color: "#fff", cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", fontSize: 9, fontWeight: 700, gap: 3 }}>
                     🏠<span>HOME</span>
                   </button>
-                  <button onClick={startGame} disabled={isPaying} style={{ width: 72, height: 72, borderRadius: "50%", background: "linear-gradient(135deg, #c060ff, #7030ff)", border: "none", color: "#fff", cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: 900, gap: 2, boxShadow: "0 0 25px rgba(180,60,255,0.55)", opacity: isPaying ? 0.6 : 1 }}>
-                    <span style={{ fontSize: 22 }}>↺</span><span>RETRY</span>
+                  <button onClick={startGame} disabled={isPaying} style={{ width: 80, height: 80, borderRadius: "50%", background: "linear-gradient(135deg, #e070ff, #8030ff)", border: "2px solid rgba(200,100,255,0.5)", color: "#fff", cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: 900, gap: 2, boxShadow: "0 0 40px rgba(180,60,255,0.7), 0 0 80px rgba(180,60,255,0.3)", opacity: isPaying ? 0.6 : 1 }}>
+                    <span style={{ fontSize: 24 }}>↺</span><span>RETRY</span>
                   </button>
                   <div style={{ position: "relative" }}>
-                    <button onClick={() => setShareMenuOpen(o => !o)} style={{ padding: "12px 14px", borderRadius: "50%", background: "rgba(255,255,255,0.09)", border: "1px solid rgba(255,255,255,0.15)", color: "#fff", cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", fontSize: 9, fontWeight: 700, gap: 3 }}>
+                    <button onClick={() => setShareMenuOpen(o => !o)} style={{ padding: "14px 16px", borderRadius: "50%", background: "rgba(255,255,255,0.09)", border: "1px solid rgba(255,255,255,0.15)", color: "#fff", cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", fontSize: 9, fontWeight: 700, gap: 3 }}>
                       📤<span>SHARE</span>
                     </button>
                     <ShareMenu />
@@ -398,18 +455,18 @@ export default function BrickBreakerMiniApp() {
           </div>
 
           {/* Power-ups panel */}
-          <div style={{ padding: "8px 14px", background: "rgba(0,0,0,0.4)", borderTop: "1px solid rgba(255,255,255,0.05)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <div style={{ color: "#403060", fontSize: 9, fontWeight: 700, letterSpacing: 1.5 }}>POWER-UPS</div>
+          <div style={{ padding: "8px 14px", background: "linear-gradient(90deg, rgba(10,5,40,0.85), rgba(30,15,60,0.85), rgba(10,5,40,0.85))", borderTop: "1px solid rgba(120,80,255,0.2)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div style={{ color: "#a080ff", fontSize: 9, fontWeight: 700, letterSpacing: 1.5, textShadow: "0 0 10px rgba(120,80,255,0.4)" }}>POWER-UPS</div>
             <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
               {[{ k: "WIDE", ic: "↔", lb: "EXPAND", c: "#00d4ff" }, { k: "FIRE", ic: "🔥", lb: "FIRE", c: "#ff8800" }, { k: "LIFE", ic: "❤️", lb: "EXTRA LIFE", c: "#ff2d78" }, { k: "FREEZE", ic: "❄️", lb: "SLOW BALL", c: "#60c0ff" }].map(pu => (
                 <div key={pu.k} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
-                  <div style={{ width: 34, height: 34, borderRadius: 9, background: "rgba(255,255,255,0.05)", border: `1px solid ${puCounts[pu.k] > 0 ? pu.c + "55" : "rgba(255,255,255,0.07)"}`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15, opacity: puCounts[pu.k] > 0 ? 1 : 0.38 }}>{pu.ic}</div>
-                  <div style={{ color: puCounts[pu.k] > 0 ? pu.c : "#403060", fontSize: 9, fontWeight: 900 }}>{puCounts[pu.k]}</div>
-                  <div style={{ color: "#403060", fontSize: 7, letterSpacing: 0.3, whiteSpace: "nowrap" }}>{pu.lb}</div>
+                  <div style={{ width: 34, height: 34, borderRadius: 9, background: puCounts[pu.k] > 0 ? `${pu.c}20` : "rgba(255,255,255,0.05)", border: `1px solid ${puCounts[pu.k] > 0 ? pu.c : "rgba(255,255,255,0.07)"}`, boxShadow: puCounts[pu.k] > 0 ? `0 0 12px ${pu.c}40` : "none", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15, opacity: puCounts[pu.k] > 0 ? 1 : 0.38 }}>{pu.ic}</div>
+                  <div style={{ color: puCounts[pu.k] > 0 ? pu.c : "#504080", fontSize: 9, fontWeight: 900, textShadow: puCounts[pu.k] > 0 ? `0 0 8px ${pu.c}60` : "none" }}>{puCounts[pu.k]}</div>
+                  <div style={{ color: "#504080", fontSize: 7, letterSpacing: 0.3, whiteSpace: "nowrap" }}>{pu.lb}</div>
                 </div>
               ))}
             </div>
-            <button onClick={() => setIsMuted(m => !m)} style={{ background: "none", border: "none", fontSize: 16, cursor: "pointer" }}>{isMuted ? "🔇" : "🎵"}</button>
+            <button onClick={() => setIsMuted(m => !m)} style={{ background: "none", border: "none", fontSize: 16, cursor: "pointer", filter: isMuted ? "grayscale(1)" : "none" }}>{isMuted ? "🔇" : "🎵"}</button>
           </div>
         </div>
       )}
