@@ -229,13 +229,24 @@ export default function BrickBreakerMiniApp() {
     }
   };
 
+  // Tuğla Oluşturma ve Renkleri Tamamen Karıştırma Sistemi
   const genBricks = (lv = 1) => {
     const rows = 5 + Math.floor((lv - 1) / 5), cols = 7, pad = 5, oTop = 14, oLeft = 7;
     const bw = (W - oLeft * 2 - pad * (cols - 1)) / cols, bh = 18;
     const arr = [];
     for (let r = 0; r < rows; r++) {
       for (let c = 0; c < cols; c++) {
-        arr.push({ x: c * (bw + pad) + oLeft, y: r * (bh + pad) + oTop, width: bw, height: bh, status: 1, rc: ROW_COLORS[r % ROW_COLORS.length], pu: null });
+        // Her bir tuğla için renk havuzundan tamamen rastgele bir renk seçiliyor
+        const randomColor = ROW_COLORS[Math.floor(Math.random() * ROW_COLORS.length)];
+        arr.push({ 
+          x: c * (bw + pad) + oLeft, 
+          y: r * (bh + pad) + oTop, 
+          width: bw, 
+          height: bh, 
+          status: 1, 
+          rc: randomColor, 
+          pu: null 
+        });
       }
     }
     const shuf = arr.map((_, i) => i);
@@ -425,7 +436,7 @@ export default function BrickBreakerMiniApp() {
       
       const pu_c = { WIDE: "#00d4ff", LIFE: "#ff3070", FREEZE: "#60c0ff", FIRE: "#ff8800" };
       const pu_l = { WIDE: "E", LIFE: "♥", FREEZE: "❄", FIRE: "F" };
-      puRef.current.forEach(p => { const pc = pu_c[p.type] || "#fff"; ctx.save(); ctx.shadowColor = pc; ctx.shadowBlur = 16; ctx.strokeStyle = pc; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(p.x, p.y, 12, 0, Math.PI * 2); ctx.stroke(); ctx.fillStyle = pc + "38"; ctx.beginPath(); ctx.arc(p.x, p.y, 10, 0, Math.PI * 2); ctx.fill(); ctx.shadowBlur = 0; ctx.fillStyle = "#fff"; ctx.font = "bold 9px sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText(pu_l[p.type] || "?", p.x, p.y + 0.5); ctx.restore(); });
+      puRef.current.forEach(p => { const pc = pu_c[p.type] || "#fff"; ctx.save(); ctx.shadowColor = pc; ctx.shadowBlur = 16; ctx.strokeStyle = pc; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(p.x, p.y, 12, 0, Math.PI * 2); ctx.stroke(); ctx.fillStyle = pc + "38"; ctx.beginPath(); ctx.arc(p.x, p.y, 10, 0, Math.PI * 2); ctx.fill(); shadowBlur = 0; ctx.fillStyle = "#fff"; ctx.font = "bold 9px sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText(pu_l[p.type] || "?", p.x, p.y + 0.5); ctx.restore(); });
       
       const py = H - PH - 5;
       ctx.save(); ctx.shadowColor = "#6060ff"; ctx.shadowBlur = 32;
