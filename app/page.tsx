@@ -56,7 +56,6 @@ export default function Page() {
               <WalletDropdownDisconnect className="w-full text-left text-slate-100" />
             </WalletDropdown>
           </Wallet>
-          <ConnectWallet className="ml-3 py-2 px-3 text-xs bg-transparent border border-slate-700 text-slate-300 hover:bg-slate-800 rounded-md" />
         </div>
       </div>
     );
