@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react";
 import { useAccount, useSignMessage } from "wagmi"; 
 // OnchainKit'in resmi cüzdan menüsü bileşenlerini dahil ediyoruz
-import { Wallet, ConnectWallet, WalletDropdown, WalletDropdownDisconnect } from "@coinbase/onchainkit/wallet";
+import { Wallet, ConnectWallet, WalletDropdown, WalletDropdownDisconnect, useWalletContext } from "@coinbase/onchainkit/wallet";
 import BrickBreakerMiniApp from "./BrickBreakerMiniApp";
 
 export default function Page() {
@@ -17,6 +17,8 @@ export default function Page() {
   useEffect(() => {
     setMounted(true);
   }, []);
+
+  const { setIsConnectModalOpen } = useWalletContext();
 
   if (!mounted) return null;
 
@@ -55,6 +57,12 @@ export default function Page() {
               <WalletDropdownDisconnect className="w-full text-left text-slate-100" />
             </WalletDropdown>
           </Wallet>
+          <button
+            onClick={() => setIsConnectModalOpen(true)}
+            className="ml-3 self-center text-xs text-slate-300 hover:underline"
+          >
+            Diğer cüzdanları göster
+          </button>
         </div>
       </div>
     );
