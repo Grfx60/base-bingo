@@ -4,7 +4,6 @@ import { useState, useEffect } from "react";
 import { useAccount, useSignMessage } from "wagmi"; 
 // OnchainKit'in resmi cüzdan menüsü bileşenlerini dahil ediyoruz
 import { Wallet, ConnectWallet, WalletDropdown, WalletDropdownDisconnect } from "@coinbase/onchainkit/wallet";
-import { Address, Avatar, Name, Identity } from "@coinbase/onchainkit/identity";
 import BrickBreakerMiniApp from "./BrickBreakerMiniApp";
 
 export default function Page() {
@@ -52,12 +51,8 @@ export default function Page() {
           <Wallet>
             <ConnectWallet className="w-full py-4 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl transition-all shadow-lg shadow-blue-500/10 text-center" />
             <WalletDropdown>
-              <Identity className="px-4 pt-3 pb-2" hasCopyAddressOnClick>
-                <Avatar />
-                <Name />
-                <Address />
-              </Identity>
-              <WalletDropdownDisconnect />
+              <div className="p-4 text-sm text-slate-300">Bağlı cüzdanınızla devam edebilirsiniz.</div>
+              <WalletDropdownDisconnect className="w-full text-left text-slate-100" />
             </WalletDropdown>
           </Wallet>
         </div>
