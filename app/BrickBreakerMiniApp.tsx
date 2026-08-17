@@ -46,7 +46,6 @@ export default function BrickBreakerMiniApp() {
   const [playerLv, setPlayerLv] = useState(1);
   const [playerXp, setPlayerXp] = useState(0);
   const [xpGained, setXpGained] = useState(0);
-  const [isSdkLoaded, setIsSdkLoaded] = useState(false);
   const [activePowerUp, setActivePowerUp] = useState(null);
   const [shareMenuOpen, setShareMenuOpen] = useState(false);
   const [leaderboardRows, setLeaderboardRows] = useState([]);
@@ -57,7 +56,6 @@ export default function BrickBreakerMiniApp() {
   const [isNewHigh, setIsNewHigh] = useState(false);
   const [puCounts, setPuCounts] = useState({ WIDE: 0, FIRE: 0, LIFE: 0, FREEZE: 0 });
   const [prevState, setPrevState] = useState("menu");
-  const [farcasterCtx, setFarcasterCtx] = useState(null);
 
   const scoreRef = useRef(0);
   const levelRef = useRef(1);
@@ -85,26 +83,9 @@ export default function BrickBreakerMiniApp() {
   useEffect(() => { gsRef.current = gameState; }, [gameState]);
   useEffect(() => { pausedRef.current = isPaused; }, [isPaused]);
   useEffect(() => { bestRef.current = bestScore; }, [bestScore]);
-  useEffect(() => { const req = playerLv * 100; if (playerXp >= req) { setPlayerLv(l => l + 1); setPlayerXp(x => x - req); } }, [playerXp, playerLv]);
-
-  // ─── Farcaster SDK init (en güvenli yöntem) ───
-  useEffect(() => {
-    const init = async () => {
-      try {
-        const mod = await import("@farcaster/miniapp-sdk");
-        const sdk = mod.sdk || mod.default;
-        if (!sdk) { setIsSdkLoaded(true); return; }
-        // context bilgisini al (Farcaster ortamında çalışıyorsa dolu gelir)
-        let ctx = null;
-        try { ctx = await Promise.race([sdk.context, new Promise(r => setTimeout(r, 1500))]); } catch (_) {}
-        setFarcasterCtx(ctx || null);
-        // ready çağrısı Farcaster'ın splash ekranını kapatır
-        try { await sdk.actions.ready(); } catch (_) {}
-        setIsSdkLoaded(true);
-      } catch (e) { setIsSdkLoaded(true); }
-    };
-    init();
-  }, []);
+  // ─── Optional Farcaster context ───
+// Base App artık standart web app olarak çalışır.
+// Oyunun açılması Farcaster SDK'ya bağlı değildir.
 
   // ─── Arka plan müziği ───
   const startBgMusic = useCallback(() => {
@@ -161,7 +142,27 @@ export default function BrickBreakerMiniApp() {
   }, [address]);
   const fetchLB = useCallback(async () => {
     setLeaderboardLoading(true);
-    try { const { data } = await supabase.from("leaderboard").select("wallet_address, best_score, best_level").order("best_score", { ascending: false }).limit(10); setLeaderboardRows(data || []); } catch (_) { setLeaderboardRows([]); } finally { setLeaderboardLoading(false); }
+    try {
+  const { data, error } = await supabase
+    .from("leaderboard")
+    .select("wallet_address, best_score, best_level")
+    .order("best_score", { ascending: false })
+    .limit(10);
+
+  if (error) {
+    console.error("LEADERBOARD ERROR:", error);
+    setLeaderboardRows([]);
+    return;
+  }
+
+  console.log("LEADERBOARD DATA:", data);
+  setLeaderboardRows(data || []);
+} catch (error) {
+  console.error("LEADERBOARD EXCEPTION:", error);
+  setLeaderboardRows([]);
+} finally {
+  setLeaderboardLoading(false);
+}
   }, []);
 
   // ─── Parçacık efekti ───
@@ -429,8 +430,6 @@ export default function BrickBreakerMiniApp() {
       await wt(sdk.actions.openUrl(xu), 2000);
     } catch (_) { window.open(xu, "_blank"); }
   };
-
-  if (!isSdkLoaded) return <div style={{ background: "#06041a", color: "#fff", padding: 40, textAlign: "center", borderRadius: 16, minHeight: 220, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14 }}>Loading...</div>;
 
   const ShareMenu = () => shareMenuOpen ? (
     <div style={{ position: "absolute", bottom: "110%", right: 0, background: "#14103a", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 12, overflow: "hidden", zIndex: 40, minWidth: 148 }}>
