@@ -150,6 +150,12 @@ export default function BrickBreakerMiniApp() {
   const challengeProgressRef = useRef(0);
   const challengeCompleteRef = useRef(false);
 
+  // Phase 11.2 — collision/render smoothing
+  const uiSyncRef = useRef(0);
+  const lastHitSoundRef = useRef(0);
+  const lastBrickSoundRef = useRef(0);
+  const comboMessageTimerRef = useRef(null);
+
   useEffect(() => { scoreRef.current = score; }, [score]);
   useEffect(() => { levelRef.current = level; }, [level]);
   useEffect(() => { livesRef.current = lives; }, [lives]);
@@ -246,12 +252,16 @@ export default function BrickBreakerMiniApp() {
 
   // ─── Parçacık efekti ───
   const spawnPtc = (bx, by, bw, bh, color) => {
-    for (let i = 0; i < 9; i++) ptcRef.current.push({ x: bx + bw / 2 + (Math.random() - 0.5) * bw * 0.75, y: by + bh / 2 + (Math.random() - 0.5) * bh, vx: (Math.random() - 0.5) * 5.5, vy: (Math.random() - 0.5) * 5.5 - 1.5, life: 1, decay: 0.052 + Math.random() * 0.05, size: 2.5 + Math.random() * 4, color });
+    const particles = ptcRef.current;
+    const count = Math.min(9, Math.max(0, 120 - particles.length));
+    for (let i = 0; i < count; i++) particles.push({ x: bx + bw / 2 + (Math.random() - 0.5) * bw * 0.75, y: by + bh / 2 + (Math.random() - 0.5) * bh, vx: (Math.random() - 0.5) * 5.5, vy: (Math.random() - 0.5) * 5.5 - 1.5, life: 1, decay: 0.052 + Math.random() * 0.05, size: 2.5 + Math.random() * 4, color });
   };
 
   // ─── Phase 3: görsel oyun geri bildirimi ───
   const addFloatText = (x, y, textValue, color = "#ffffff") => {
-    floatTextRef.current.push({
+    const list = floatTextRef.current;
+    if (list.length >= 24) list.shift();
+    list.push({
       x,
       y,
       text: textValue,
@@ -262,7 +272,9 @@ export default function BrickBreakerMiniApp() {
   };
 
   const addHitFlash = (x, y, color = "#ffffff") => {
-    hitFlashRef.current.push({
+    const list = hitFlashRef.current;
+    if (list.length >= 24) list.shift();
+    list.push({
       x,
       y,
       radius: 4,
@@ -865,6 +877,28 @@ export default function BrickBreakerMiniApp() {
   };
 
   // ─── Fizik / oyun güncelleme döngüsü ───
+  const syncGameplayUI = () => {
+    const now = performance.now();
+    if (now - uiSyncRef.current < 80) return;
+    uiSyncRef.current = now;
+    setScore(scoreRef.current);
+    setCombo(comboRef.current);
+  };
+
+  const playHitSoundThrottled = () => {
+    const now = performance.now();
+    if (now - lastHitSoundRef.current < 45) return;
+    lastHitSoundRef.current = now;
+    playHitSoundThrottled();
+  };
+
+  const playBrickSoundThrottled = () => {
+    const now = performance.now();
+    if (now - lastBrickSoundRef.current < 55) return;
+    lastBrickSoundRef.current = now;
+    playBrickSoundThrottled();
+  };
+
   const update = () => {
     if (gsRef.current !== "playing" || pausedRef.current) return;
 
@@ -899,12 +933,13 @@ export default function BrickBreakerMiniApp() {
     for (let bi = ballsRef.current.length - 1; bi >= 0; bi--) {
       const ball = ballsRef.current[bi];
       ball.x += ball.vx; ball.y += ball.vy;
-      ball.trail.push({ x: ball.x, y: ball.y });
-      if (ball.trail.length > 14) ball.trail.shift();
+      const trail = ball.trail;
+      if (trail.length >= 14) trail.shift();
+      trail.push({ x: ball.x, y: ball.y });
 
-      if (ball.x - ballR <= 0) { ball.x = ballR; ball.vx = Math.abs(ball.vx); audio("hit"); }
-      if (ball.x + ballR >= W) { ball.x = W - ballR; ball.vx = -Math.abs(ball.vx); audio("hit"); }
-      if (ball.y - ballR <= 0) { ball.y = ballR; ball.vy = Math.abs(ball.vy); audio("hit"); }
+      if (ball.x - ballR <= 0) { ball.x = ballR; ball.vx = Math.abs(ball.vx); playHitSoundThrottled(); }
+      if (ball.x + ballR >= W) { ball.x = W - ballR; ball.vx = -Math.abs(ball.vx); playHitSoundThrottled(); }
+      if (ball.y - ballR <= 0) { ball.y = ballR; ball.vy = Math.abs(ball.vy); playHitSoundThrottled(); }
 
       if (ball.vy > 0 && ball.y + ballR >= paddleY && ball.y - ballR <= paddleY + PH && ball.x >= pxRef.current && ball.x <= pxRef.current + pwRef.current) {
         ball.y = paddleY - ballR;
@@ -934,7 +969,7 @@ export default function BrickBreakerMiniApp() {
           window.setTimeout(() => setShowCombo(false), 500);
         }
 
-        audio("hit");
+        playHitSoundThrottled();
       }
 
       if (bossActiveRef.current && bossRef.current) {
@@ -969,13 +1004,12 @@ export default function BrickBreakerMiniApp() {
 
           const bossGain = feverRef.current ? 40 : 20;
           scoreRef.current += bossGain;
-          setScore(scoreRef.current);
 
           addFloatText(boss.x + boss.width / 2, boss.y + boss.height / 2, `+${bossGain}`, "#ff7ad9");
           addHitFlash(boss.x + boss.width / 2, boss.y + boss.height / 2, "#ff7ad9");
           spawnPtc(boss.x, boss.y, boss.width, boss.height, "#ff7ad9");
           shakeRef.current = Math.max(shakeRef.current, 5);
-          audio("brick");
+          playBrickSoundThrottled();
 
           if (boss.hp <= 0) {
             const reward = 250 + levelRef.current * 25;
@@ -1086,9 +1120,10 @@ keepComboAlive();
 
           setComboMessage("DENT!");
           setShowCombo(true);
-          window.setTimeout(() => setShowCombo(false), 650);
+          if (comboMessageTimerRef.current) window.clearTimeout(comboMessageTimerRef.current);
+        comboMessageTimerRef.current = window.setTimeout(() => setShowCombo(false), 650);
 
-          audio("brick");
+          playBrickSoundThrottled();
           spawnPtc(brick.x, brick.y, brick.width, brick.height, brick.rc.mid);
           break;
         }
@@ -1121,9 +1156,10 @@ keepComboAlive();
 
           setComboMessage("CRACK!");
           setShowCombo(true);
-          window.setTimeout(() => setShowCombo(false), 650);
+          if (comboMessageTimerRef.current) window.clearTimeout(comboMessageTimerRef.current);
+        comboMessageTimerRef.current = window.setTimeout(() => setShowCombo(false), 650);
 
-          audio("brick");
+          playBrickSoundThrottled();
           spawnPtc(brick.x, brick.y, brick.width, brick.height, brick.rc.mid);
           break;
         }
@@ -1194,9 +1230,10 @@ keepComboAlive();
 
         setComboMessage(comboTier);
         setShowCombo(true);
-        window.setTimeout(() => setShowCombo(false), 650);
+        if (comboMessageTimerRef.current) window.clearTimeout(comboMessageTimerRef.current);
+        comboMessageTimerRef.current = window.setTimeout(() => setShowCombo(false), 650);
 
-        audio("brick");
+        playBrickSoundThrottled();
         spawnPtc(brick.x, brick.y, brick.width, brick.height, brick.rc.mid);
         if (brick.pu) { puRef.current.push({ x: brick.x + brick.width / 2, y: brick.y + brick.height / 2, type: brick.pu, vy: 1.7 }); brick.pu = null; }
         break;
@@ -1309,6 +1346,7 @@ keepComboAlive();
 
     syncPrimaryBall();
     checkVic();
+    syncGameplayUI();
   };
 
   const doNextLevel = () => {
@@ -1537,6 +1575,8 @@ keepComboAlive();
       ctx.restore();
     };
 
+    let bgGradient = null;
+
     const render = () => {
       const cv = canvasRef.current;
       if (!cv) return;
@@ -1555,11 +1595,13 @@ keepComboAlive();
       ctx.save();
       ctx.translate(shakeX, shakeY);
 
-      const bg = ctx.createLinearGradient(0, 0, W, H);
-      bg.addColorStop(0, "#07051d");
-      bg.addColorStop(0.48, "#11104a");
-      bg.addColorStop(1, "#050421");
-      ctx.fillStyle = bg;
+      if (!bgGradient) {
+        bgGradient = ctx.createLinearGradient(0, 0, W, H);
+        bgGradient.addColorStop(0, "#07051d");
+        bgGradient.addColorStop(0.48, "#11104a");
+        bgGradient.addColorStop(1, "#050421");
+      }
+      ctx.fillStyle = bgGradient;
       ctx.fillRect(0, 0, W, H);
 
       // Derinlik veren yıldızlar
