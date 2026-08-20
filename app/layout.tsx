@@ -5,7 +5,7 @@ import { RootProvider } from "./rootProvider";
 const APP_URL = "https://base-brick-breaker.vercel.app";
 const OG_IMAGE_URL = `${APP_URL}/og-image.png`;
 
-// Farcaster / Base App mini-app embed (linki paylaşınca zengin önizleme kartı için)
+// Farcaster / Base App mini-app embed
 const miniAppEmbed = {
   version: "1",
   imageUrl: OG_IMAGE_URL,
@@ -23,8 +23,10 @@ const miniAppEmbed = {
 
 export const metadata: Metadata = {
   metadataBase: new URL(APP_URL),
+
   title: "Base Brick Breaker",
   description: "Web3 Brick Breaker Game on Base Network",
+
   openGraph: {
     title: "Base Brick Breaker",
     description: "Web3 Brick Breaker Game on Base Network",
@@ -40,14 +42,18 @@ export const metadata: Metadata = {
     ],
     type: "website",
   },
+
   twitter: {
     card: "summary_large_image",
     title: "Base Brick Breaker",
     description: "Web3 Brick Breaker Game on Base Network",
     images: [OG_IMAGE_URL],
   },
+
   other: {
-    "base:app_id": "697e42fa2aafa0bc9ad8a2fd",
+    // Base Dashboard domain verification
+    "base:app_id": "6a86d5f66ea1f57fed333a51",
+
     "fc:miniapp": JSON.stringify(miniAppEmbed),
     "fc:frame": JSON.stringify(miniAppEmbed),
   },
