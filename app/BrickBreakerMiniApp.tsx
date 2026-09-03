@@ -4,15 +4,26 @@
 
 import React, { useEffect, useRef, useState, useCallback } from "react";
 import { createClient } from "@supabase/supabase-js";
-import { useAccount, useConnect, useDisconnect, useSendTransaction, useWriteContract, useSwitchChain } from "wagmi";
+import { useAccount, useConnect, useDisconnect, useSendTransaction, useWriteContract, useSwitchChain, usePublicClient } from "wagmi";
 import { parseEther } from "viem";
 
 const GAME_FEE_RECIPIENT = "0xBe96fB12585Bd1cd2822Ae451A69eA5E8970806F";
 const GAME_FEE_AMOUNT = parseEther("0.00001");
 
-const SCORE_CONTRACT_ADDRESS = "0x63bCD5075303EA083CB08A3439075a7e87B5166B";
+const SCORE_CONTRACT_ADDRESS = "0x9abb0d4E37dA149285935D14D4446A4f2b91ac02";
 
 const SCORE_CONTRACT_ABI = [
+  {
+    type: "function",
+    name: "getPlayerScore",
+    stateMutability: "view",
+    inputs: [{ name: "player", type: "address" }],
+    outputs: [
+      { name: "bestScore", type: "uint256" },
+      { name: "bestLevel", type: "uint256" },
+      { name: "updatedAt", type: "uint256" },
+    ],
+  },
   {
     type: "function",
     name: "submitScore",
@@ -25,7 +36,7 @@ const SCORE_CONTRACT_ABI = [
   },
 ] as const;
 
-const BASE_SEPOLIA_CHAIN_ID = 84532;
+const BASE_MAINNET_CHAIN_ID = 8453;
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
 const safeUrl = supabaseUrl.startsWith("http") ? supabaseUrl : "https://dummy.supabase.co";
@@ -49,6 +60,7 @@ export default function BrickBreakerMiniApp() {
   const { sendTransactionAsync } = useSendTransaction();
   const { writeContractAsync } = useWriteContract();
   const { switchChainAsync } = useSwitchChain();
+  const publicClient = usePublicClient({ chainId: BASE_MAINNET_CHAIN_ID });
   const canvasRef = useRef(null);
   const bgCanvasRef = useRef(null);
   const bgMusicRef = useRef(null);
@@ -263,20 +275,41 @@ export default function BrickBreakerMiniApp() {
       });
     } catch (_) {}
 
-    // Also record the score on Base Sepolia as an onchain proof.
+    // Mainnet: read the current onchain record first.
+    // Only send a transaction when this score is a genuine new best.
     try {
-      setOnchainScoreStatus("submitting");
+      setOnchainScoreStatus("checking");
 
-      if (chainId !== BASE_SEPOLIA_CHAIN_ID) {
-        await switchChainAsync({ chainId: BASE_SEPOLIA_CHAIN_ID });
+      if (chainId !== BASE_MAINNET_CHAIN_ID) {
+        await switchChainAsync({ chainId: BASE_MAINNET_CHAIN_ID });
       }
+
+      if (!publicClient) {
+        throw new Error("Base Mainnet public client is unavailable");
+      }
+
+      const current = await publicClient.readContract({
+        address: SCORE_CONTRACT_ADDRESS,
+        abi: SCORE_CONTRACT_ABI,
+        functionName: "getPlayerScore",
+        args: [address],
+      });
+
+      const currentBestScore = BigInt(current[0]);
+
+      if (BigInt(Math.floor(s)) <= currentBestScore) {
+        setOnchainScoreStatus("already_saved");
+        return;
+      }
+
+      setOnchainScoreStatus("submitting");
 
       await writeContractAsync({
         address: SCORE_CONTRACT_ADDRESS,
         abi: SCORE_CONTRACT_ABI,
         functionName: "submitScore",
         args: [BigInt(Math.floor(s)), BigInt(Math.max(1, Math.floor(l)))],
-        chainId: BASE_SEPOLIA_CHAIN_ID,
+        chainId: BASE_MAINNET_CHAIN_ID,
       });
 
       setOnchainScoreStatus("success");
@@ -284,7 +317,7 @@ export default function BrickBreakerMiniApp() {
       console.error("ONCHAIN SCORE ERROR:", error);
       setOnchainScoreStatus("error");
     }
-  }, [address, chainId, switchChainAsync, writeContractAsync]);
+  }, [address, chainId, publicClient, switchChainAsync, writeContractAsync]);
   const fetchLB = useCallback(async () => {
     setLeaderboardLoading(true);
     try {
@@ -2125,7 +2158,9 @@ keepComboAlive();
               <div style={{ position: "absolute", inset: 0, background: "rgba(3,2,20,0.93)", backdropFilter: "blur(8px)", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 15, padding: 20 }}>
                 <div style={{ fontWeight: 900, fontSize: 40, letterSpacing: 3, background: "linear-gradient(135deg, #ff5b7d, #ff9c2e, #c45cff)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>GAME OVER</div>
                 {isNewHigh && <div style={{ color: "#ffd34d", fontWeight: 900, fontSize: 14 }}>🌟 NEW HIGH SCORE!</div>}
+                {onchainScoreStatus === "checking" && <div style={{ color: "#67eaff", fontWeight: 800, fontSize: 10 }}>⛓ CHECKING BASE SCORE...</div>}
                 {onchainScoreStatus === "submitting" && <div style={{ color: "#67eaff", fontWeight: 800, fontSize: 10 }}>⛓ SAVING SCORE ON BASE...</div>}
+                {onchainScoreStatus === "already_saved" && <div style={{ color: "#8bff9b", fontWeight: 800, fontSize: 10 }}>✓ SCORE ALREADY SAVED ON BASE</div>}
                 {onchainScoreStatus === "success" && <div style={{ color: "#8bff9b", fontWeight: 800, fontSize: 10 }}>✓ SCORE SAVED ON BASE</div>}
                 {onchainScoreStatus === "error" && <div style={{ color: "#ff8b9b", fontWeight: 800, fontSize: 10 }}>ONCHAIN SAVE FAILED — SUPABASE SCORE KEPT</div>}
                 <div style={{ width: "100%", display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 7 }}>
