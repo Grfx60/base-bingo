@@ -1071,7 +1071,7 @@ export default function BrickBreakerMiniApp() {
         if (brick.status === 3) {
           brick.status = 2;
           comboRef.current += 1;
-          setCombo(comboRef.current);
+          // UI is synced by syncGameplayUI() every ~80ms to avoid collision-frame React renders.
           if (comboRef.current > maxComboRef.current) {
             maxComboRef.current = comboRef.current;
             setMaxCombo(maxComboRef.current);
@@ -1115,7 +1115,7 @@ keepComboAlive();
           updateMission(comboRef.current);
 
           scoreRef.current += feverRef.current ? 40 : 20;
-          setScore(scoreRef.current);
+          // UI is synced by syncGameplayUI() every ~80ms to avoid collision-frame React renders.
 
           addFloatText(
             brick.x + brick.width / 2,
@@ -1143,7 +1143,7 @@ keepComboAlive();
         if (brick.status === 2) {
           brick.status = 1;
           comboRef.current += 1;
-          setCombo(comboRef.current);
+          // UI is synced by syncGameplayUI() every ~80ms to avoid collision-frame React renders.
           if (comboRef.current > maxComboRef.current) {
             maxComboRef.current = comboRef.current;
             setMaxCombo(maxComboRef.current);
@@ -1152,7 +1152,7 @@ keepComboAlive();
           updateMission(comboRef.current);
 
           scoreRef.current += feverRef.current ? 30 : 15;
-          setScore(scoreRef.current);
+          // UI is synced by syncGameplayUI() every ~80ms to avoid collision-frame React renders.
 
           addFloatText(
             brick.x + brick.width / 2,
@@ -1183,7 +1183,7 @@ keepComboAlive();
         updateChallenge("bricks", bricksBrokenRunRef.current);
         if (bricksBrokenRunRef.current >= 50) unlockAchievement("brick50", "BRICK BREAKER", "Destroyed 50 bricks");
         comboRef.current += 1;
-        setCombo(comboRef.current);
+          // UI is synced by syncGameplayUI() every ~80ms to avoid collision-frame React renders.
         updateChallenge("combo", comboRef.current);
         if (comboRef.current >= 20) unlockAchievement("combo20", "COMBO MASTER", "Reached x20 combo");
         if (comboRef.current > maxComboRef.current) {
@@ -1209,7 +1209,7 @@ keepComboAlive();
         const gained = 10 + Math.max(0, comboRef.current - 1) * 5 + chainBonus;
         const finalGained = feverRef.current ? gained * 2 : gained;
         scoreRef.current += finalGained;
-        setScore(scoreRef.current);
+          // UI is synced by syncGameplayUI() every ~80ms to avoid collision-frame React renders.
         setPlayerXp(x => x + 5);
 
         const activeMission = missionRef.current;
