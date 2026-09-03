@@ -180,6 +180,7 @@ export default function BrickBreakerMiniApp() {
   // Prevents the animation loop from completing the same level more than once
   // before React commits the gameState update to "levelup".
   const levelTransitionRef = useRef(false);
+  const scoreSubmittedRef = useRef(false);
 
   useEffect(() => { scoreRef.current = score; }, [score]);
   useEffect(() => { levelRef.current = level; }, [level]);
@@ -838,6 +839,7 @@ export default function BrickBreakerMiniApp() {
     setScore(0); setLevel(1); setLives(4); setXpGained(0); setCombo(0); setIsNewHigh(false); setIsPaused(false);
     levelTransitionRef.current = false;
     gsRef.current = "playing";
+    scoreSubmittedRef.current = false;
     levelStartLivesRef.current = 4;
     startMission(1);
     maxComboRef.current = 0;
@@ -1336,7 +1338,15 @@ keepComboAlive();
       setChainCount(0);
       if (comboTimerRef.current) window.clearTimeout(comboTimerRef.current);
       trailRef.current = [];
-      if (livesRef.current <= 0) { setGameState("gameover"); submitScore(scoreRef.current, levelRef.current); return; }
+      if (livesRef.current <= 0) {
+        gsRef.current = "gameover";
+        setGameState("gameover");
+        if (!scoreSubmittedRef.current) {
+          scoreSubmittedRef.current = true;
+          submitScore(scoreRef.current, levelRef.current);
+        }
+        return;
+      }
       resetBall(levelRef.current); setActivePowerUp(null);
     }
 
