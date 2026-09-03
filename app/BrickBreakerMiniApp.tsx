@@ -4,11 +4,28 @@
 
 import React, { useEffect, useRef, useState, useCallback } from "react";
 import { createClient } from "@supabase/supabase-js";
-import { useAccount, useConnect, useDisconnect, useSendTransaction } from "wagmi";
+import { useAccount, useConnect, useDisconnect, useSendTransaction, useWriteContract, useSwitchChain } from "wagmi";
 import { parseEther } from "viem";
 
 const GAME_FEE_RECIPIENT = "0xBe96fB12585Bd1cd2822Ae451A69eA5E8970806F";
 const GAME_FEE_AMOUNT = parseEther("0.00001");
+
+const SCORE_CONTRACT_ADDRESS = "0x63bCD5075303EA083CB08A3439075a7e87B5166B";
+
+const SCORE_CONTRACT_ABI = [
+  {
+    type: "function",
+    name: "submitScore",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "score", type: "uint256" },
+      { name: "level", type: "uint256" },
+    ],
+    outputs: [],
+  },
+] as const;
+
+const BASE_SEPOLIA_CHAIN_ID = 84532;
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
 const safeUrl = supabaseUrl.startsWith("http") ? supabaseUrl : "https://dummy.supabase.co";
@@ -26,16 +43,19 @@ const ROW_COLORS = [
 ];
 
 export default function BrickBreakerMiniApp() {
-  const { address, isConnected } = useAccount();
+  const { address, isConnected, chainId } = useAccount();
   const { connect, connectors } = useConnect();
   const { disconnect } = useDisconnect();
   const { sendTransactionAsync } = useSendTransaction();
+  const { writeContractAsync } = useWriteContract();
+  const { switchChainAsync } = useSwitchChain();
   const canvasRef = useRef(null);
   const bgCanvasRef = useRef(null);
   const bgMusicRef = useRef(null);
 
   const [isPaying, setIsPaying] = useState(false);
   const [paymentError, setPaymentError] = useState(null);
+  const [onchainScoreStatus, setOnchainScoreStatus] = useState("idle");
   const [score, setScore] = useState(0);
   const [level, setLevel] = useState(1);
   const [lives, setLives] = useState(4);
@@ -227,9 +247,43 @@ export default function BrickBreakerMiniApp() {
   // ─── Leaderboard ───
   const submitScore = useCallback(async (s, l) => {
     if (!address || s <= 0) return;
-    if (s > bestRef.current) { setBestScore(s); setIsNewHigh(true); }
-    try { await supabase.rpc("upsert_best_score", { p_wallet: address, p_score: s, p_level: l }); } catch (_) {}
-  }, [address]);
+
+    if (s > bestRef.current) {
+      setBestScore(s);
+      setIsNewHigh(true);
+    }
+
+    // Supabase remains the fast leaderboard source.
+    try {
+      await supabase.rpc("upsert_best_score", {
+        p_wallet: address,
+        p_score: s,
+        p_level: l,
+      });
+    } catch (_) {}
+
+    // Also record the score on Base Sepolia as an onchain proof.
+    try {
+      setOnchainScoreStatus("submitting");
+
+      if (chainId !== BASE_SEPOLIA_CHAIN_ID) {
+        await switchChainAsync({ chainId: BASE_SEPOLIA_CHAIN_ID });
+      }
+
+      await writeContractAsync({
+        address: SCORE_CONTRACT_ADDRESS,
+        abi: SCORE_CONTRACT_ABI,
+        functionName: "submitScore",
+        args: [BigInt(Math.floor(s)), BigInt(Math.max(1, Math.floor(l)))],
+        chainId: BASE_SEPOLIA_CHAIN_ID,
+      });
+
+      setOnchainScoreStatus("success");
+    } catch (error) {
+      console.error("ONCHAIN SCORE ERROR:", error);
+      setOnchainScoreStatus("error");
+    }
+  }, [address, chainId, switchChainAsync, writeContractAsync]);
   const fetchLB = useCallback(async () => {
     setLeaderboardLoading(true);
     try {
@@ -258,7 +312,7 @@ export default function BrickBreakerMiniApp() {
   // ─── Parçacık efekti ───
   const spawnPtc = (bx, by, bw, bh, color) => {
     const particles = ptcRef.current;
-    const count = Math.min(9, Math.max(0, 120 - particles.length));
+    const count = Math.min(5, Math.max(0, 120 - particles.length));
     for (let i = 0; i < count; i++) particles.push({ x: bx + bw / 2 + (Math.random() - 0.5) * bw * 0.75, y: by + bh / 2 + (Math.random() - 0.5) * bh, vx: (Math.random() - 0.5) * 5.5, vy: (Math.random() - 0.5) * 5.5 - 1.5, life: 1, decay: 0.052 + Math.random() * 0.05, size: 2.5 + Math.random() * 4, color });
   };
 
@@ -901,14 +955,14 @@ export default function BrickBreakerMiniApp() {
     const now = performance.now();
     if (now - lastHitSoundRef.current < 45) return;
     lastHitSoundRef.current = now;
-    playHitSoundThrottled();
+    audio("hit");
   };
 
   const playBrickSoundThrottled = () => {
     const now = performance.now();
     if (now - lastBrickSoundRef.current < 55) return;
     lastBrickSoundRef.current = now;
-    playBrickSoundThrottled();
+    audio("brick");
   };
 
   const update = () => {
@@ -1448,7 +1502,7 @@ keepComboAlive();
     const drawTri = (tx, ty, size, angle, color) => {
       ctx.save(); ctx.translate(tx, ty); ctx.rotate(angle);
       ctx.beginPath(); ctx.moveTo(0, -size); ctx.lineTo(size * 0.86, size * 0.5); ctx.lineTo(-size * 0.86, size * 0.5); ctx.closePath();
-      ctx.strokeStyle = color; ctx.lineWidth = 1.5; ctx.globalAlpha = 0.55; ctx.shadowColor = color; ctx.shadowBlur = 8; ctx.stroke();
+      ctx.strokeStyle = color; ctx.lineWidth = 1.5; ctx.globalAlpha = 0.55; ctx.shadowColor = color; ctx.shadowBlur = 4; ctx.stroke();
       ctx.restore();
     };
     const loop = () => {
@@ -1650,7 +1704,7 @@ keepComboAlive();
         ctx.globalAlpha = Math.max(0, p.life);
         ctx.fillStyle = p.color;
         ctx.shadowColor = p.color;
-        ctx.shadowBlur = 9;
+        ctx.shadowBlur = 4;
         ctx.beginPath();
         ctx.roundRect(p.x - p.size / 2, p.y - p.size / 2, p.size, p.size, 2);
         ctx.fill();
@@ -1704,7 +1758,7 @@ keepComboAlive();
         ctx.textAlign = "center";
         ctx.textBaseline = "middle";
         ctx.shadowColor = f.color;
-        ctx.shadowBlur = 7;
+        ctx.shadowBlur = 4;
         ctx.fillText(f.text, f.x, f.y);
         ctx.restore();
       });
@@ -2061,6 +2115,9 @@ keepComboAlive();
               <div style={{ position: "absolute", inset: 0, background: "rgba(3,2,20,0.93)", backdropFilter: "blur(8px)", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 15, padding: 20 }}>
                 <div style={{ fontWeight: 900, fontSize: 40, letterSpacing: 3, background: "linear-gradient(135deg, #ff5b7d, #ff9c2e, #c45cff)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>GAME OVER</div>
                 {isNewHigh && <div style={{ color: "#ffd34d", fontWeight: 900, fontSize: 14 }}>🌟 NEW HIGH SCORE!</div>}
+                {onchainScoreStatus === "submitting" && <div style={{ color: "#67eaff", fontWeight: 800, fontSize: 10 }}>⛓ SAVING SCORE ON BASE...</div>}
+                {onchainScoreStatus === "success" && <div style={{ color: "#8bff9b", fontWeight: 800, fontSize: 10 }}>✓ SCORE SAVED ON BASE</div>}
+                {onchainScoreStatus === "error" && <div style={{ color: "#ff8b9b", fontWeight: 800, fontSize: 10 }}>ONCHAIN SAVE FAILED — SUPABASE SCORE KEPT</div>}
                 <div style={{ width: "100%", display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 7 }}>
                   {[{ l: "SCORE", v: score.toLocaleString(), c: "#63eaff" }, { l: "BEST", v: Math.max(score, bestScore).toLocaleString(), c: "#ffd34d" }, { l: "LEVEL", v: level, c: "#c080ff" }].map(s => (
                     <div key={s.l} style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 13, padding: "12px 6px", textAlign: "center" }}>
