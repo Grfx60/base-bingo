@@ -42,7 +42,7 @@ const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
 const safeUrl = supabaseUrl.startsWith("http") ? supabaseUrl : "https://dummy.supabase.co";
 const supabase = createClient(safeUrl, supabaseAnonKey || "dummy-key");
 
-const W = 390, H = 500, PW = 86, PH = 16, BR = 8;
+const W = 390, H = 500, PW = 102, PH = 20, BR = 8;
 
 const ROW_COLORS = [
   { top: "#ff90c0", mid: "#ff2d78", bot: "#990040", shine: "rgba(255,210,230,0.72)" },
@@ -831,7 +831,7 @@ export default function BrickBreakerMiniApp() {
   };
 
   const resetBall = (lv = levelRef.current) => {
-    const baseSpeed = 2.0 + (lv - 1) * 0.15;
+    const baseSpeed = 1.9 + (lv - 1) * 0.10;
     const sp = frozenRef.current ? baseSpeed * 0.5 : baseSpeed;
     const dir = Math.random() > 0.5 ? 1 : -1;
     ballsRef.current = [makeBall(W / 2, H - 52, dir * sp, -sp)];
@@ -1009,14 +1009,17 @@ export default function BrickBreakerMiniApp() {
     }
 
     const ballR = BR;
-    const paddleY = H - PH - 18;
+    const paddleY = H - PH - 46;
 
+    // Daha yüksek levellarda topun aynı level içinde aşırı hızlanmasını önle.
+    // Boost artık daha yavaş yükseliyor ve her paddle temasında daha kontrollü uygulanıyor.
+    // Aynı level içinde topun hızlanması artık çok daha yavaş.
+    // Level zorluğunu temel hız belirliyor; uzun rally'lerde hız birikmiyor.
     const targetBoost = Math.min(
-      0.25,
-      (levelRef.current - 1) * 0.02 +
-        Math.min(0.10, levelTimeRef.current / 3600)
+      0.06,
+      levelTimeRef.current / 18000
     );
-    speedBoostRef.current += (targetBoost - speedBoostRef.current) * 0.0025;
+    speedBoostRef.current += (targetBoost - speedBoostRef.current) * 0.0008;
 
     if (feverRef.current) {
       const remaining = Math.max(0, feverEndRef.current - performance.now());
@@ -1047,7 +1050,11 @@ export default function BrickBreakerMiniApp() {
         const center = pxRef.current + pwRef.current / 2;
         const hitPosition = Math.max(-1, Math.min(1, (ball.x - center) / (pwRef.current / 2)));
         const speed = Math.max(2.0, Math.hypot(ball.vx, ball.vy));
-        const boostedSpeed = speed * (1 + speedBoostRef.current);
+        const levelMaxSpeed = 3.35 + Math.min(0.44, (levelRef.current - 1) * 0.04);
+        const boostedSpeed = Math.min(
+          speed * (1 + speedBoostRef.current * 0.15),
+          levelMaxSpeed
+        );
         const angle = hitPosition * 62 * (Math.PI / 180);
         ball.vx = boostedSpeed * Math.sin(angle);
         ball.vy = -Math.abs(boostedSpeed * Math.cos(angle));
@@ -1859,7 +1866,7 @@ keepComboAlive();
       }
 
       // Paddle — her frame yeniden çizilir
-      const py = H - PH - 18;
+      const py = H - PH - 46;
       const p = pxRef.current;
       const pw = pwRef.current;
 
