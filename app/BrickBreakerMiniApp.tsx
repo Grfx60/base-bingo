@@ -4,8 +4,8 @@
 
 import React, { useEffect, useRef, useState, useCallback } from "react";
 import { createClient } from "@supabase/supabase-js";
-import { useAccount, useConnect, useDisconnect, useSendTransaction, useWriteContract, useSwitchChain, usePublicClient } from "wagmi";
-import { parseEther } from "viem";
+import { useAccount, useConnect, useDisconnect, useSendTransaction, useSendCalls, useWriteContract, useSwitchChain, usePublicClient } from "wagmi";
+import { encodeFunctionData, parseEther } from "viem";
 import { Attribution } from "ox/erc8021";
 
 const GAME_FEE_RECIPIENT = "0xBe96fB12585Bd1cd2822Ae451A69eA5E8970806F";
@@ -63,6 +63,7 @@ export default function BrickBreakerMiniApp() {
   const { connect, connectors } = useConnect();
   const { disconnect } = useDisconnect();
   const { sendTransactionAsync } = useSendTransaction();
+  const { sendCallsAsync } = useSendCalls();
   const { writeContractAsync } = useWriteContract();
   const { switchChainAsync } = useSwitchChain();
   const publicClient = usePublicClient({ chainId: BASE_MAINNET_CHAIN_ID });
@@ -309,21 +310,51 @@ export default function BrickBreakerMiniApp() {
 
       setOnchainScoreStatus("submitting");
 
-      await writeContractAsync({
-        address: SCORE_CONTRACT_ADDRESS,
+      // Base App / Smart Wallet path: use EIP-5792 wallet_sendCalls
+      // and pass the Builder Code through the dataSuffix capability.
+      // If the connected wallet does not support sendCalls, fall back
+      // to the normal Wagmi contract write with the same attribution.
+      const scoreData = encodeFunctionData({
         abi: SCORE_CONTRACT_ABI,
         functionName: "submitScore",
         args: [BigInt(Math.floor(s)), BigInt(Math.max(1, Math.floor(l)))],
-        chainId: BASE_MAINNET_CHAIN_ID,
-        dataSuffix: DATA_SUFFIX,
       });
+
+      try {
+        await sendCallsAsync({
+          chainId: BASE_MAINNET_CHAIN_ID,
+          calls: [
+            {
+              to: SCORE_CONTRACT_ADDRESS,
+              data: scoreData,
+            },
+          ],
+          capabilities: {
+            dataSuffix: {
+              value: DATA_SUFFIX,
+              optional: true,
+            },
+          },
+        });
+      } catch (sendCallsError) {
+        console.warn("wallet_sendCalls unavailable; falling back to writeContract:", sendCallsError);
+
+        await writeContractAsync({
+          address: SCORE_CONTRACT_ADDRESS,
+          abi: SCORE_CONTRACT_ABI,
+          functionName: "submitScore",
+          args: [BigInt(Math.floor(s)), BigInt(Math.max(1, Math.floor(l)))],
+          chainId: BASE_MAINNET_CHAIN_ID,
+          dataSuffix: DATA_SUFFIX,
+        });
+      }
 
       setOnchainScoreStatus("success");
     } catch (error) {
       console.error("ONCHAIN SCORE ERROR:", error);
       setOnchainScoreStatus("error");
     }
-  }, [address, chainId, publicClient, switchChainAsync, writeContractAsync]);
+  }, [address, chainId, publicClient, switchChainAsync, sendCallsAsync, writeContractAsync]);
   const fetchLB = useCallback(async () => {
     setLeaderboardLoading(true);
     try {
@@ -871,12 +902,38 @@ export default function BrickBreakerMiniApp() {
     setPaymentError(null);
     if (gameMode === "tournament") {
       setIsPaying(true);
-      try { await sendTransactionAsync({
-        to: GAME_FEE_RECIPIENT,
-        value: GAME_FEE_AMOUNT,
-        dataSuffix: DATA_SUFFIX,
-      }); }
-      catch { setPaymentError("Payment rejected."); setIsPaying(false); return; }
+      try {
+        // Prefer EIP-5792 sendCalls so Base App / Smart Wallet can carry
+        // the Builder Code through the dataSuffix capability.
+        try {
+          await sendCallsAsync({
+            chainId: BASE_MAINNET_CHAIN_ID,
+            calls: [
+              {
+                to: GAME_FEE_RECIPIENT,
+                value: GAME_FEE_AMOUNT,
+              },
+            ],
+            capabilities: {
+              dataSuffix: {
+                value: DATA_SUFFIX,
+                optional: true,
+              },
+            },
+          });
+        } catch (sendCallsError) {
+          console.warn("wallet_sendCalls unavailable for game fee; falling back:", sendCallsError);
+          await sendTransactionAsync({
+            to: GAME_FEE_RECIPIENT,
+            value: GAME_FEE_AMOUNT,
+            dataSuffix: DATA_SUFFIX,
+          });
+        }
+      } catch {
+        setPaymentError("Payment rejected.");
+        setIsPaying(false);
+        return;
+      }
       setIsPaying(false);
     }
     setScore(0); setLevel(1); setLives(4); setXpGained(0); setCombo(0); setIsNewHigh(false); setIsPaused(false);
