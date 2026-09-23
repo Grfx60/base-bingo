@@ -6,9 +6,14 @@ import React, { useEffect, useRef, useState, useCallback } from "react";
 import { createClient } from "@supabase/supabase-js";
 import { useAccount, useConnect, useDisconnect, useSendTransaction, useWriteContract, useSwitchChain, usePublicClient } from "wagmi";
 import { parseEther } from "viem";
+import { Attribution } from "ox/erc8021";
 
 const GAME_FEE_RECIPIENT = "0xBe96fB12585Bd1cd2822Ae451A69eA5E8970806F";
 const GAME_FEE_AMOUNT = parseEther("0.00001");
+
+const DATA_SUFFIX = Attribution.toDataSuffix({
+  codes: ["bc_wsh2e7z6"],
+});
 
 const SCORE_CONTRACT_ADDRESS = "0x9abb0d4E37dA149285935D14D4446A4f2b91ac02";
 
@@ -310,6 +315,7 @@ export default function BrickBreakerMiniApp() {
         functionName: "submitScore",
         args: [BigInt(Math.floor(s)), BigInt(Math.max(1, Math.floor(l)))],
         chainId: BASE_MAINNET_CHAIN_ID,
+        dataSuffix: DATA_SUFFIX,
       });
 
       setOnchainScoreStatus("success");
@@ -865,7 +871,11 @@ export default function BrickBreakerMiniApp() {
     setPaymentError(null);
     if (gameMode === "tournament") {
       setIsPaying(true);
-      try { await sendTransactionAsync({ to: GAME_FEE_RECIPIENT, value: GAME_FEE_AMOUNT }); }
+      try { await sendTransactionAsync({
+        to: GAME_FEE_RECIPIENT,
+        value: GAME_FEE_AMOUNT,
+        dataSuffix: DATA_SUFFIX,
+      }); }
       catch { setPaymentError("Payment rejected."); setIsPaying(false); return; }
       setIsPaying(false);
     }
