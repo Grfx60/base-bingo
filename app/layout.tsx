@@ -52,7 +52,7 @@ export const metadata: Metadata = {
 
   other: {
     // Base Dashboard domain verification
-    "base:app_id": "697e42fa2aafa0bc9ad8a2fd",
+    "base:app_id": "6a86d5f66ea1f57fed333a51",
 
     "fc:miniapp": JSON.stringify(miniAppEmbed),
     "fc:frame": JSON.stringify(miniAppEmbed),
