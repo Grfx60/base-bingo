@@ -5,7 +5,7 @@
 import React, { useEffect, useRef, useState, useCallback } from "react";
 import { createClient } from "@supabase/supabase-js";
 import { useAccount, useConnect, useDisconnect, useSendTransaction, useSendCalls, useWriteContract, useSwitchChain, usePublicClient } from "wagmi";
-import { encodeFunctionData, parseEther } from "viem";
+import { parseEther } from "viem";
 import { Attribution } from "ox/erc8021";
 
 const GAME_FEE_RECIPIENT = "0xBe96fB12585Bd1cd2822Ae451A69eA5E8970806F";
@@ -310,51 +310,24 @@ export default function BrickBreakerMiniApp() {
 
       setOnchainScoreStatus("submitting");
 
-      // Base App / Smart Wallet path: use EIP-5792 wallet_sendCalls
-      // and pass the Builder Code through the dataSuffix capability.
-      // If the connected wallet does not support sendCalls, fall back
-      // to the normal Wagmi contract write with the same attribution.
-      const scoreData = encodeFunctionData({
+      // Use the normal contract-write flow for score submission.
+      // This keeps the Coinbase Wallet confirmation prompt working while
+      // still appending the Builder Code through dataSuffix.
+      await writeContractAsync({
+        address: SCORE_CONTRACT_ADDRESS,
         abi: SCORE_CONTRACT_ABI,
         functionName: "submitScore",
         args: [BigInt(Math.floor(s)), BigInt(Math.max(1, Math.floor(l)))],
+        chainId: BASE_MAINNET_CHAIN_ID,
+        dataSuffix: DATA_SUFFIX,
       });
-
-      try {
-        await sendCallsAsync({
-          chainId: BASE_MAINNET_CHAIN_ID,
-          calls: [
-            {
-              to: SCORE_CONTRACT_ADDRESS,
-              data: scoreData,
-            },
-          ],
-          capabilities: {
-            dataSuffix: {
-              value: DATA_SUFFIX,
-              optional: true,
-            },
-          },
-        });
-      } catch (sendCallsError) {
-        console.warn("wallet_sendCalls unavailable; falling back to writeContract:", sendCallsError);
-
-        await writeContractAsync({
-          address: SCORE_CONTRACT_ADDRESS,
-          abi: SCORE_CONTRACT_ABI,
-          functionName: "submitScore",
-          args: [BigInt(Math.floor(s)), BigInt(Math.max(1, Math.floor(l)))],
-          chainId: BASE_MAINNET_CHAIN_ID,
-          dataSuffix: DATA_SUFFIX,
-        });
-      }
 
       setOnchainScoreStatus("success");
     } catch (error) {
       console.error("ONCHAIN SCORE ERROR:", error);
       setOnchainScoreStatus("error");
     }
-  }, [address, chainId, publicClient, switchChainAsync, sendCallsAsync, writeContractAsync]);
+  }, [address, chainId, publicClient, switchChainAsync, writeContractAsync]);
   const fetchLB = useCallback(async () => {
     setLeaderboardLoading(true);
     try {
